@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Golf Scoring Model — PGA Tour Scoring-Average Predictor</title>
+  <meta
+    name="description"
+    content="A linear model that predicts a PGA Tour player's scoring average from five performance stats, trained on 1,678 player-seasons (2010–2018)."
+  />
+
+  <!-- Google Fonts. (Fine here because these files are hosted as a normal
+       static site, not inside the Artifact sandbox that blocks font CDNs.) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400..600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page">
+    <!-- ── Header ─────────────────────────────────────────────── -->
+    <header class="masthead">
+      <div class="wordmark">
+        <svg class="flag" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 21V3" />
+          <path d="M6 4h11l-2.4 3L17 10H6" class="flag-cloth" />
+        </svg>
+        <span class="wordmark-text">
+          <span class="wordmark-title">Scoring Model</span>
+          <span class="wordmark-sub">PGA Tour · 2010–2018</span>
+        </span>
+      </div>
+
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch colour theme">
+        <span class="theme-toggle-dot"></span>
+        <span class="theme-toggle-label" data-label-light="Light" data-label-dark="Dark">Theme</span>
+      </button>
+    </header>
+
+    <!-- ── Intro ──────────────────────────────────────────────── -->
+    <section class="intro">
+      <p class="eyebrow">Predictive model · Linear regression</p>
+      <h1 class="headline">
+        What a golfer&rsquo;s stats say their <em>scoring average</em> should be.
+      </h1>
+      <p class="standfirst">
+        Adjust the five inputs that define a player&rsquo;s game and watch the
+        predicted scoring average respond. The model was fit on
+        <strong>1,678 PGA&nbsp;Tour player-seasons</strong> — the same maths runs
+        live in your browser.
+      </p>
+    </section>
+
+    <!-- ── Main: controls (left) + sticky results rail (right) ──── -->
+    <main class="workspace">
+      <!-- LEFT: inputs -->
+      <section class="panel controls" aria-label="Player statistics">
+        <div class="panel-head">
+          <h2 class="panel-title">Player profile</h2>
+          <button id="reset" class="ghost-btn" type="button">Reset to tour average</button>
+        </div>
+
+        <!-- Preset archetypes -->
+        <div class="presets" role="group" aria-label="Preset player archetypes">
+          <!-- buttons injected by JS -->
+        </div>
+
+        <!-- Sliders -->
+        <div id="sliders" class="sliders">
+          <!-- slider rows injected by JS -->
+        </div>
+      </section>
+
+      <!-- RIGHT: outputs -->
+      <aside class="rail">
+        <!-- Hero prediction -->
+        <section class="panel hero" aria-live="polite">
+          <p class="hero-label">Predicted scoring average</p>
+          <p class="hero-number"><span id="score">70.95</span></p>
+          <p class="hero-unit">strokes per round · <span class="lower-better">lower is better</span></p>
+
+          <!-- Position on the dataset's real score range -->
+          <div class="gauge" aria-hidden="true">
+            <div class="gauge-track">
+              <span class="gauge-fill" id="gauge-fill"></span>
+              <span class="gauge-marker" id="gauge-marker"></span>
+            </div>
+            <div class="gauge-ends">
+              <span>68.7 · best in data</span>
+              <span>74.4 · worst</span>
+            </div>
+          </div>
+          <p class="hero-context" id="hero-context"></p>
+        </section>
+
+        <!-- Feature importance -->
+        <section class="panel chart" aria-label="Feature importance">
+          <div class="panel-head">
+            <h2 class="panel-title">Which stats drive scoring most</h2>
+          </div>
+          <p class="chart-note">
+            Share of predictive power each stat carries, measured by a Random
+            Forest across every player-season.
+          </p>
+          <div id="importance" class="importance">
+            <!-- bars injected by JS -->
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <!-- ── Footer ─────────────────────────────────────────────── -->
+    <footer class="colophon">
+      <p class="colophon-by">
+        Built by <strong>Muhaimin Afif Mushahar</strong>
+      </p>
+      <p class="colophon-stack">
+        Built with Python + scikit-learn · linear regression over 1,678 PGA&nbsp;Tour player-seasons
+      </p>
+      <p class="colophon-link">
+        <a href="https://github.com/mpip0505/golf-score-predictor" rel="noopener">
+          View the code on GitHub →
+        </a>
+      </p>
+    </footer>
+  </div>
+
+  <script src="predictor.js"></script>
+</body>
+</html>
