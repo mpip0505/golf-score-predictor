@@ -29,6 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true      # turn Pages on automatically if it isn't already
       - uses: actions/upload-pages-artifact@v3
         with:
           path: ./web          # only the static site is published
