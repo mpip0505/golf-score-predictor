@@ -1,0 +1,13 @@
+# Python dependencies for the phase scripts and the Streamlit app.
+# Install into a virtual environment:
+#     python3 -m venv venv
+#     source venv/bin/activate
+#     pip install -r requirements.txt
+#
+# Versions are pinned to what this project was built and tested with.
+# (The static web app in web/ needs none of these — it runs in the browser.)
+
+pandas==3.0.3
+numpy==2.5.1
+scikit-learn==1.9.0
+streamlit==1.59.2
