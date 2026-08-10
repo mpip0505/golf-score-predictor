@@ -113,6 +113,71 @@ honest average is 0.678.
 **Conclusion:** Linear Regression's advantage over Random Forest is real and consistent, not a
 fluke of one split. This strengthens (doesn't reverse) Phase 4's conclusion.
 
-## Open question for later phases
+## Phase 6 — Strokes Gained features, rejected as leakage (`06_strokes_gained.py`)
 
-Which model should the Streamlit app (Phase 5) actually use for its live prediction — the more accurate Linear Regression, or the Random Forest (whose importances we're using for the chart  anyway)? Worth deciding explicitly before Phase 5 rather than defaulting silently.
+The CSV has five unused Strokes Gained columns (`SG:OTT`, `SG:APR`, `SG:ARG`, `Average SG Putts`,
+`Average SG Total`). They're missing on exactly the same 634 rows as everything else, so adding
+them costs no extra data. Adding the four components to the core 5 looks like a triumph:
+
+| Feature set | R² | RMSE |
+|---|---|---|
+| Core 5 (Phase 3–5 model) | 0.678 | 0.391 |
+| Core 5 + 4 SG components | **0.927** | **0.187** |
+
+**The improvement is entirely fake.** Three tests, all 5-fold CV on the same 1,678 rows:
+
+| Test | Feature set | R² |
+|---|---|---|
+| 1 | `Average SG Total` **alone** — zero golf stats | 0.924 |
+| 2 | The 4 SG components alone | 0.924 |
+| 3 | Core + components + `SG:Total` | 0.926 |
+
+Test 1 is decisive: one column that knows nothing about distance, accuracy, greens, putting or
+scrambling matches the full 9-feature model. Test 2 shows the components aren't a safer subset —
+they sum to the total (mean gap 0.0043), so splitting a leaky number four ways doesn't stop it
+leaking. Test 3 is a side-lesson in collinearity: adding `SG:Total` to the four components changes
+nothing, because a linear model is a weighted sum and could already construct that total itself.
+
+**The mechanism.** Strokes Gained is *defined* as score relative to the field, so
+`SG:Total = field average − player's score`. Adding `Average Score` and `SG:Total` back together
+should therefore recover the field average — and it does, identically in every season:
+
+| Year | 2010 | 2011 | 2012 | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 |
+|---|---|---|---|---|---|---|---|---|---|
+| mean | 71.092 | 71.015 | 71.034 | 71.053 | 71.034 | 71.099 | 71.154 | 71.084 | 71.064 |
+| std | 0.161 | 0.204 | 0.196 | 0.166 | 0.180 | 0.192 | 0.167 | 0.193 | 0.219 |
+
+Overall 71.070 ± 0.191. The entire "model" collapses to one line of arithmetic:
+
+```
+Average Score = 71.07 - SG:Total
+```
+
+The clincher: the spread of that constant (0.191) matches the SG model's measured RMSE (0.187).
+The model's whole remaining error *is* the year-to-year drift in the field average — it learned the
+identity and nothing else.
+
+**Decision: all five SG columns rejected.** Not because 0.927 is a bad score, but because it isn't
+a prediction. Computing SG for a season requires already knowing that season's scores. Forecasting
+2019 before 2019 is played, SG doesn't exist yet, so a model depending on it can never be run. This
+is the difference between *explaining* a finished season (SG is excellent) and *predicting* an
+unplayed one (SG is useless). R² 0.678 that survives contact with reality beats R² 0.927 that can
+never be computed when you need it.
+
+Phase 3–5's model stands unchanged and the Streamlit app keeps its 5 sliders. The finding is a
+negative one: there's no free lunch in this CSV — the only columns that would raise our score are
+derived from the answer, which is why they were left out in Phase 2 in the first place.
+
+## Open questions for later phases
+
+- Phase 4's "Random Forest loses" verdict was measured against an **untuned** forest with no
+  `max_depth`. The overfitting was diagnosed and never treated. Tuning it (`GridSearchCV` over
+  `max_depth`/`min_samples_leaf`) would make that comparison a fair fight.
+- The train/test split is random across 2010–2018, so the model trains on 2018 rows to predict
+  other 2018 rows. A season-based split (train 2010–2016, test 2017–2018) asks the honest question:
+  can it predict a season it has never seen? Expect the score to drop.
+- Phase 3's caveat that raw linear coefficients aren't comparable across features is still
+  unresolved — a `StandardScaler` pass would fix it.
+- `web/predictor.js` has hand-transcribed coefficients and importances that have already drifted
+  from the numbers in this file (it ranks scrambling above average putts; Phase 4 has them the
+  other way). Generating that file from a script would end the drift.

@@ -53,6 +53,9 @@ Known data quirks:
   omits the field rather than writing 0.
 - `Points` and `Money` load as strings (`Money` looks like `"$2,680,487"`) because of `$` and comma
   formatting. Neither is used as a model feature, so they don't need cleaning for this project.
+- The five SG columns leak the target and must not be used as features — Phase 6 established that
+  `Average Score = 71.07 - Average SG Total` to within ±0.19 strokes, and the four components sum
+  to that total. See FINDINGS.md Phase 6 before reaching for them again.
 
 ## Conventions
 
@@ -68,6 +71,7 @@ Known data quirks:
 - [x] Phase 4: Train Random Forest, compare to baseline, print feature importances
 - [x] Phase 4.5: Cross-validate both models on the full dataset to confirm the comparison is robust
 - [x] Phase 5: Build Streamlit app (sliders per stat, live prediction, feature-importance chart)
+- [x] Phase 6: Test the Strokes Gained columns as features — rejected, they leak the target
 
 See `FINDINGS.md` for the detailed results and interpretation from each phase, including a
 noteworthy result: the Random Forest overfits (train R² 0.945 vs test R² 0.697) and is actually
@@ -75,4 +79,6 @@ beaten by the Linear Regression baseline (test R² 0.770) on this dataset. Phase
 cross-validation (R² 0.678 ± 0.056 for Linear Regression vs 0.619 ± 0.049 for Random Forest,
 Linear Regression winning all 5 folds) confirms this isn't a fluke of one split. The Streamlit app
 (`app.py`) uses Linear Regression for the live prediction (more accurate) and the Random Forest's
-feature importances for the "what matters most" chart (not confounded by feature scale).
+feature importances for the "what matters most" chart (not confounded by feature scale). Phase 6
+tested the Strokes Gained columns as extra features and rejected them: they push R² to 0.927, but
+that's data leakage, not skill — see the Dataset note above.
