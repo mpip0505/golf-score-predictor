@@ -248,64 +248,105 @@ correctly) refuse to answer. This confirms the PGA model can't serve as an amate
 
 ## Phase 8 — Course-aware round tracker + weakness report (`08_round_tracker.py`)
 
-Run with `streamlit run 08_round_tracker.py`. It's a separate app from `app.py`, and rounds are
-saved to `data/my_rounds.csv` (gitignored). 18-hole rounds only.
+Run with `streamlit run 08_round_tracker.py`. It's a separate app from `app.py`. Rounds are saved
+to `data/my_rounds.csv` (gitignored), with an Export/Import CSV option in the app and a
+header-only `data/my_rounds.example.csv`. 18-hole rounds only.
 
-**New shared helpers:** `rounds.py` (schema, validation, save/load), `handicap.py` (course
-maths), `strokes_lost.py` (per-area breakdown), `strokes_config.py` (every conversion constant,
-named and labelled by confidence). `data/whs_differentials_table.csv` is **header-only** until the
-official WHS table is pasted in.
+**Shared helpers:**
+- `rounds.py`: schema and validation.
+- `storage.py`: load, save, export and import. Import is all-or-nothing, skips duplicates, and
+  loads older CSVs that are missing newer columns.
+- `handicap.py`: course maths.
+- `strokes_lost.py`: per-area breakdown and ranking.
+- `strokes_config.py`: every conversion constant, named and labelled by confidence.
 
-**Course-adjusted part** (`handicap.py`):
-- `course_handicap = index × slope/113 + (rating − par)`, rounded.
-- `expected_score = rating + index × slope/113 + overshoot`. Overshoot = benchmark
-  `score_to_par − handicap`, interpolated and clamped to 0–25. It exists because an index is
-  built from your *best* 8 of 20 rounds, so a typical round comes in higher.
-- `score_differential = 113/slope × (score − rating)`.
-- `estimated_index`: best 8 of the last 20 differentials. Under 20 rounds it reports "needs WHS
-  table" and gives no number.
+### Phase 9 refinements (`09_course_aware_checks.py`, `python handicap.py`)
 
-**Not course-adjusted part** (`strokes_lost.py`). Each area is compared with the benchmark at
-your index and converted to strokes (positive = lost):
+Phase 9 tightened the maths using official WHS formulas. `09_course_aware_checks.py` prints the
+numbers behind each change, and `python handicap.py` runs the hand-checked asserts.
+
+**Overshoot noise.** Raw overshoot (`score_to_par − handicap`) at 0/5/10/15/20/25 hcp is 0.83,
+1.33, **0.88**, 2.38, **1.69**, 3.97. It goes up and down, which is sampling noise and not golf.
+A straight line (`np.polyfit`, degree 1) gives `overshoot = 0.1045 × handicap + 0.541`: 0.54,
+1.06, 1.59, 2.11, 2.63, 3.15. The largest correction is −0.94 at 20 hcp. The line is clamped to
+0–25.
+
+**Why two expected scores.**
+- **Plays to handicap** = rating + index × slope/113 is the headline number. It comes straight
+  from WHS definitions.
+- **Typical round** = that plus the fitted overshoot, roughly ±2 strokes. It answers "what does an
+  average day look like?", since an index is built from your *best* rounds. It's soft for two
+  reasons. The benchmark overshoot was measured on real courses, which probably average a slope
+  above 113, so it already contains some of the slope effect and adding it on top double counts.
+  And the benchmark courses' ratings are unknown, so score to par is treated as score to rating.
+- On an example course (71.2/128) the two differ by 0.5 strokes at scratch and 3.2 at 25 hcp.
+- Neither expected score is fed into the weakness engine, which still compares stats with the
+  benchmark at the player's index.
+
+**Course handicap** = index × slope/113 + (rating − par) (USGA WHS FAQ, Rules 6.1/6.2). It's kept
+unrounded and rounded half-up only for display.
+
+**Differential** = 113/slope × (adjusted score − rating − PCC). Adjusted score and PCC are new
+optional fields. Without an adjusted score the gross score is used. PCC defaults to 0 and is
+validated to −1.0…+3.0.
+
+**Estimated index.** Uses the WHS Rule 5.2a table (stored as a plain dict, one line per count, in
+`handicap.py`) on the newest 20 rounds. Each differential is rounded to one decimal, sorted, the
+lowest N are averaged, the adjustment is added, and the result is rounded to one decimal. There's
+no 0.96 multiplier (that was the pre-WHS system). Under 3 rounds the app shows "need 3 rounds".
+The index is always labelled **"ESTIMATED, not official"**. Not modelled:
+- the net double bogey cap when no adjusted score is entered, so the estimate runs high after a
+  blow-up hole;
+- exceptional score reductions;
+- soft and hard caps.
+
+**Rounding.** Python's `round()` uses banker's rounding (`round(18.5) == 18`), and floats store
+12.55 as 12.5499…, so `round(12.55, 1)` gives 12.5. `round_half_up()` (using the `Decimal`
+module) rounds halves up as golf expects. One assert checks a 12.55 → 12.6 index.
+
+**Putts/GIR confound.** Golfers who miss many greens chip close and take fewer putts, so putting
+can look better than it is. Putting is in the low-confidence tier. It's flagged **"confounded by
+GIR"** when the player's *average* GIR over at least 3 rounds is below `GIR_CONFOUND_RATIO`
+(0.7, a judgement call, not calibrated) × the benchmark GIR. When flagged, it's never ranked
+above penalties or short game. Trigger points per 18 holes: 7.69 greens at 0 hcp, 5.54 at 5,
+4.54 at 10, 3.02 at 15, 2.14 at 20, 1.26 at 25. Because it's a ratio, the margin shrinks from
+~3.3 greens at scratch to ~0.5 at 25 hcp. 3-putts are logged but not scored, because the
+benchmark file has no 3-putt column.
+
+**Strokes-lost conversions** (positive = lost):
 
 | Area | Conversion | Confidence |
 |---|---|---|
-| Penalties | (yours − typical) × 1.0 | High |
-| Putting | (yours − typical putts) × 1.0; 3-putts shown, **not** added again | High (but confounded, see below) |
-| Short game | (typical scramble rate × *your* attempts − your saves) × 1.0 | Medium |
-| Approach | (typical GIR − yours) × (1 − typical scramble rate) | Low |
-| Driving | gap shown, cost 0 | Low, off on purpose |
+| Penalties | (yours − typical) × 1.0 | high |
+| Short game | (typical scramble rate × *your* attempts − your saves) × 1.0 | medium |
+| Approach | (typical GIR − yours) × (1 − typical scramble rate) | low |
+| Putting | (yours − typical putts) × 1.0; flagged when confounded | low |
+| Driving | gap shown, cost 0 | low, off on purpose |
 
-Overlaps were removed on purpose: short game is scored on *your own* attempts, so it doesn't
-overlap the GIR row, and 3-putts are already inside total putts. GIR, fairway and putt benchmarks
-are **not** scaled by slope or length, because no data says how much each stat shifts with course
-difficulty.
+Per-stat gaps are labelled "not course-adjusted". GIR, fairway and putt benchmarks are never
+scaled by slope or length.
 
-**Worked example** (index 12.4, rating 71.2, slope 128, par 72, score 88): course handicap 13,
-expected 86.85, differential 14.83. Breakdown: putting +1.89, short game +1.14, approach +0.33,
-penalties −0.02. Biggest leak is putting.
+**Hand-verified:**
+- course handicap 15 / 130 / 73.5 / par 72 = 18.76 (19);
+- differential 90 / 72.0 / 130 / PCC 0 = 15.6;
+- index from [15.3, 15.2, 16.6] = 13.2;
+- index from [12…17] = 11.5;
+- 4-round index from [15.6, 16.5, 16.5, 22.6] = 14.6;
+- differential with adjusted score 92 and PCC 1.0 on 72.0/130 = 16.52.
 
-**Verified:** helpers checked against hand calculations; validation rejects impossible rounds
-(e.g. up-and-down attempts > missed greens, 3-putts × 3 > putts); the Streamlit page runs headless
-(`streamlit.testing`) with 0 rounds, with saved rounds, with an incomplete form (rejected) and
-with a complete form (saved). All tests ran on a scratch copy, so no test rounds are in the real
-`data/my_rounds.csv`.
+All tests (old-format CSV, save, import with bad/good/duplicate rows, form submit, flagged
+putting ranking, empty state) ran headless on a scratch copy. The real `data/my_rounds.csv` was
+never created.
 
-**Weakest assumptions:**
-- **Overshoot isn't smooth:** 0.83, 1.33, **0.88**, 2.38, **1.69**, 3.97 for 0–25 hcp. Expected
-  score inherits these wiggles. It also assumes the benchmark courses had rating ≈ par.
-- **Course handicap formula** is the commonly published WHS one, not checked against a primary
-  source.
-- **Differential is simplified:** gross score (no net double bogey cap, because there are no
-  hole-by-hole scores), no Playing Conditions Calculation, no soft/hard caps. So the estimated
-  index runs high after blow-up holes.
-- **Putts are confounded with approach play:** missing greens and chipping close lowers putt
-  counts. "Putting" can look better than it is for players who miss many greens.
-- **Per-stat gaps ignore course difficulty.** On a hard course every area looks worse. The
-  course-adjusted score line is the fair overall number, and the breakdown is for ranking areas
-  within a round.
-- **One round is noisy.** The "average over all rounds" chart is the real signal and needs ~5+
-  rounds before it means much.
+**Unverified, for the user to check:**
+- whether your national association uses the (rating − par) term in course handicap, and since
+  when;
+- the differential formula and the Rule 5.2a table, against the official WHS text;
+- how plus handicaps round (`round_half_up` rounds −0.5 away from zero).
+
+**Other weak assumptions:**
+- Per-stat gaps ignore course difficulty, so on a hard course every area looks worse.
+- One round is noisy. The average over rounds is the real signal and needs ~5+ rounds.
 
 ## Open questions for later phases
 

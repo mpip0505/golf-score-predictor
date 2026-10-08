@@ -13,6 +13,43 @@ project. Prioritize teaching over shipping: explain what each step does and why 
 keep code simple and heavily commented over clever or abstracted, and pause after each phase below
 for the user to review before continuing to the next.
 
+## ⚠️ Open decisions — raise these FIRST in every new conversation
+
+**At the start of a new conversation, before any other work, show the user this list (briefly) and
+ask which they want to resolve now.** When one is resolved: apply it, record the outcome in
+FINDINGS.md, and delete it from this list. Don't resolve any of these yourself. Each needs either
+the user's choice or an official source they provide. Also run `git status` and mention any
+uncommitted work.
+
+**Needs checking against official sources** (never fill in from memory):
+1. WHS differential formula `113/slope × (adjusted − rating − PCC)` and the Rule 5.2a table
+   (`WHS_TABLE` in `handicap.py`): confirm against the official WHS text.
+2. Course handicap's `(rating − par)` term: does the user's national association use it, and since
+   when? (`course_handicap()` in `handicap.py`)
+3. Plus-handicap rounding: `round_half_up()` rounds −0.5 to −1 (away from zero). Confirm the
+   association's rule.
+4. Benchmark values to check against the Shot Scope eBook (`data/handicap_benchmarks.csv`):
+   fairways % rises to 49 at 10 hcp, putts tie at 15/20 hcp (33.1), and GIR drops 17 points from
+   0 to 5 hcp.
+5. Benchmark stat definitions in the eBook: scrambling denominator (missed greens?), whether putts
+   from the fringe count, and how fairways % is counted. These decide whether the Tour comparison
+   in Phase 7 is fair.
+6. Is the benchmark "handicap" a Handicap Index or a course handicap? (Currently assumed: index.)
+
+**Needs the user's choice:**
+7. `GIR_CONFOUND_RATIO = 0.7` (`strokes_config.py`): as a ratio it triggers with ~3.3 greens of
+   margin at scratch but only ~0.5 at 25 hcp. Keep it, or switch to an absolute gap?
+8. Blank PCC is saved as 0.0, so "unknown" and "zero" can't be told apart later. OK?
+9. Import is all-or-nothing and skips rows that exactly match an existing round. OK?
+10. `FAIRWAY_MISS_STROKES = 0.0`: revisit once enough of the user's own rounds exist?
+11. 3-putts are logged but not scored, because there's no benchmark. Find a source, or leave it?
+12. Overshoot uses a straight-line fit and "typical round" is labelled ±2 strokes. Accept, or
+    try something else?
+13. Phase 10 is not defined yet. The earlier idea was a personal model learned from the user's own
+    rounds. Agree on its scope and the minimum number of rounds before starting.
+14. Older open questions at the bottom of FINDINGS.md: tune the Random Forest, try a season-based
+    split, add a `StandardScaler`, and fix the `web/predictor.js` coefficient drift.
+
 ## Tech stack
 
 - Python, in a venv at `./venv` (`source venv/bin/activate`)
@@ -62,12 +99,14 @@ Known data quirks:
 the Shot Scope Strokes Gained eBook 4th ed (2021). It holds score *to par* (not raw score) and has
 no three-putt data. Never fill in or "fix" its numbers from memory. They come from the source only.
 
-`data/whs_differentials_table.csv` — the official WHS "rounds played → differentials used +
-adjustment" table for under 20 rounds. Header-only until the user pastes it. Never fill it from
-memory.
-
 `data/my_rounds.csv` (Phase 8+, gitignored) — the user's own logged rounds. This is personal data,
-so never commit it.
+so never commit it, and never create test rounds in it: run checks on a scratch copy.
+`data/my_rounds.example.csv` is the header-only template. Round fields are listed in
+`ROUND_COLUMNS` in `rounds.py`. `length_yards`, `adjusted_score` (blank = use gross score) and
+`pcc` (blank = 0, range −1.0…+3.0) are optional, and older CSVs without them must still load.
+
+WHS constants and formulas come only from official sources the user provides. Never recall or
+substitute them from memory.
 
 ## Amateur feature: design principle
 
@@ -82,8 +121,18 @@ an amateur score prediction, and must never be used on inputs outside its traini
   build-up is visible in the file listing itself — don't reorganize into a package/src layout.
 - Shared helpers are unnumbered root files: `benchmarks.py` (load/validate the benchmark CSV,
   `expected_stat()` interpolation with clamping, tour range guard), `rounds.py` (round schema,
-  validation, save/load), `handicap.py` (course handicap, expected score, differential, estimated
-  index), `strokes_lost.py` (per-area breakdown), `strokes_config.py` (named conversion constants).
+  validation), `storage.py` (load/save/export/import), `handicap.py`, `strokes_lost.py`
+  (per-area breakdown, putting confound, ranking), `strokes_config.py` (named constants).
+- `handicap.py` behaviours: everything is kept unrounded and rounded half-up (`round_half_up`,
+  not Python's `round`) only for display or where WHS says to. There are two expected scores:
+  `plays_to_handicap` (headline) and `typical_round` (soft, ±2, with a fitted overshoot clamped
+  to 0–25). The index uses the WHS Rule 5.2a dict on the newest 20 rounds, needs at least 3
+  rounds, and has no 0.96 multiplier. `python handicap.py` runs hand-checked asserts, which must
+  keep passing.
+- The handicap index is ALWAYS labelled "ESTIMATED, not official", along with what isn't modelled.
+- Expected scores are never fed into the weakness engine, which compares stats with the
+  benchmark at the player's index. Confounded putting is never ranked above penalties or short
+  game.
 - Strokes-lost constants live only in `strokes_config.py`. Ask the user before changing any of
   them. GIR/fairway/putt benchmarks are never scaled by slope or length.
 - Don't touch `web/` as part of the amateur feature.
@@ -101,7 +150,9 @@ an amateur score prediction, and must never be used on inputs outside its traini
 - [x] Phase 7: Amateur handicap benchmarks (Shot Scope), interpolation helper, tour reference
       column, 4-feature tour model with range guard
 - [x] Phase 8: Course-aware round tracker + strokes-lost weakness report
-      (`streamlit run 08_round_tracker.py`); WHS table for <20 rounds still to be pasted
+      (`streamlit run 08_round_tracker.py`)
+- [x] Phase 9: WHS-based maths (two expected scores, Rule 5.2a index, adjusted score/PCC),
+      putting/GIR confound flag, storage.py + Export/Import (`09_course_aware_checks.py`)
 
 See `FINDINGS.md` for the detailed results and interpretation from each phase, including a
 noteworthy result: the Random Forest overfits (train R² 0.945 vs test R² 0.697) and is actually

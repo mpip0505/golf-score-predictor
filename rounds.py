@@ -1,25 +1,24 @@
-# Shared helpers for YOUR logged rounds (Phase 8).
+# Shared helpers: what a logged round looks like, and how we check it.
 #
-# Every round you enter is saved as one row in data/my_rounds.csv. That
-# file is gitignored on purpose: it's personal data and shouldn't end up on
-# GitHub. A plain CSV keeps it simple, and you can open it in any
-# spreadsheet app to check or fix a typo.
+# Phase 8 had saving/loading in here too; that now lives in storage.py, so
+# this file only answers "what columns does a round have?" and "is this
+# round possible?". Keeping the RULES separate from the FILE HANDLING means
+# the import feature (storage.py) can reuse exactly the same checks as the
+# form in the app.
 #
 # 18-hole rounds only for now: the per-hole limits below (e.g. at most 18
-# greens) assume 18 holes.
-
-import os
+# greens) assume 18 holes, and there's no "holes" column yet.
 
 import pandas as pd
 
-ROUNDS_PATH = "data/my_rounds.csv"
 HOLES = 18
 
-# The columns of my_rounds.csv, in order. Grouped as:
+# The columns of a saved round, in order. Grouped as:
 #   - when / where:   date, course_name, tee
 #   - course info:    from the scorecard, for this course and these tees
 #   - you:            your handicap index on the day you played
 #   - the round:      score and stats
+#   - WHS extras:     optional, for a more accurate score differential
 ROUND_COLUMNS = [
     "date",
     "course_name",
@@ -29,26 +28,59 @@ ROUND_COLUMNS = [
     "par",
     "length_yards",       # optional; stored only, not used in any calculation
     "handicap_index",
-    "score",
+    "score",              # gross score: every stroke you actually took
     "fairways_hit",
     "fairways_possible",  # par 4s and par 5s - par 3s have no fairway to hit
     "gir",                # greens in regulation, out of 18
     "putts",
-    "three_putts",
+    "three_putts",        # logged, but not scored yet (no benchmark - see strokes_lost.py)
     "up_down_attempts",   # missed greens where you tried to get up and down
     "up_down_saves",      # ...and how many of those you did
     "penalties",
+    "adjusted_score",     # optional: score after the WHS net-double-bogey cap
+    "pcc",                # optional: WHS Playing Conditions Calculation, default 0
 ]
 
-# Every column except length_yards must be filled in.
-OPTIONAL_COLUMNS = ["length_yards"]
+# Columns you may leave blank, and what a blank means. None = "stays
+# blank"; a number = "blank means this value".
+OPTIONAL_DEFAULTS = {
+    "length_yards": None,
+    "adjusted_score": None,  # blank -> differential uses the gross score
+    "pcc": 0.0,              # blank -> no conditions adjustment
+}
+
+
+def is_blank(value):
+    """True for None, NaN (how pandas stores an empty CSV cell) or empty text."""
+    if isinstance(value, str):
+        return value.strip() == ""
+    return value is None or pd.isna(value)
+
+
+def add_missing_columns(rounds):
+    """
+    Make an older rounds table fit the current schema.
+
+    A CSV saved before adjusted_score and pcc existed simply doesn't have
+    those columns. Instead of failing, we add them, filled with their
+    default (blank, or 0 for pcc). Then every later step can assume all
+    ROUND_COLUMNS are there.
+    """
+    rounds = rounds.copy()
+    for col, default in OPTIONAL_DEFAULTS.items():
+        if col not in rounds.columns:
+            rounds[col] = default
+        elif default is not None:
+            # Column exists but some cells are blank: fill those too.
+            rounds[col] = rounds[col].fillna(default)
+    return rounds
 
 
 def validate_round(r):
     """
-    Check one round (a dict with the ROUND_COLUMNS keys) for impossible or
-    out-of-range values. Returns a list of plain-English problems; an empty
-    list means the round is OK to save.
+    Check one round (a dict, or a pandas row, with the ROUND_COLUMNS keys)
+    for impossible or out-of-range values. Returns a list of plain-English
+    problems; an empty list means the round is OK to save.
 
     Catching mistakes here matters more than it looks: one typo (putts = 330
     instead of 33) saved to the CSV would quietly skew every average built
@@ -58,9 +90,9 @@ def validate_round(r):
 
     # --- Missing values ---
     for col in ROUND_COLUMNS:
-        if col in OPTIONAL_COLUMNS:
+        if col in OPTIONAL_DEFAULTS:
             continue
-        if r.get(col) is None or (isinstance(r.get(col), str) and not r[col].strip()):
+        if is_blank(r.get(col)):
             problems.append(f"{col} is required.")
     if problems:
         return problems  # the range checks below need these values
@@ -74,7 +106,7 @@ def validate_round(r):
         problems.append("Course rating must be between 60 and 80.")
     if not 60 <= r["par"] <= 75:
         problems.append("Par must be between 60 and 75.")
-    if r.get("length_yards") is not None and r["length_yards"] <= 0:
+    if not is_blank(r.get("length_yards")) and r["length_yards"] <= 0:
         problems.append("Length must be positive (or leave it blank).")
 
     # --- The round itself ---
@@ -112,27 +144,18 @@ def validate_round(r):
     if not -10 <= r["handicap_index"] <= 54:
         problems.append("Handicap index must be between +10 (enter -10) and 54.")
 
+    # --- Optional WHS extras ---
+    # The net-double-bogey cap can only LOWER a hole score, never raise it,
+    # so an adjusted score above the gross score must be a typo.
+    adjusted = r.get("adjusted_score")
+    if not is_blank(adjusted):
+        if adjusted > r["score"]:
+            problems.append("Adjusted score can't be higher than your gross score.")
+        if adjusted < r["par"] - 15:
+            problems.append("Adjusted score looks wrong for 18 holes - please check it.")
+
+    pcc = r.get("pcc")
+    if not is_blank(pcc) and not -1.0 <= pcc <= 3.0:
+        problems.append("PCC must be between -1.0 and +3.0.")
+
     return problems
-
-
-def load_rounds(path=ROUNDS_PATH):
-    """All saved rounds, oldest first. An empty table if none saved yet."""
-    if not os.path.exists(path):
-        return pd.DataFrame(columns=ROUND_COLUMNS)
-    rounds = pd.read_csv(path, parse_dates=["date"])
-    # Sort by date so "last 20 rounds" really means the most recent 20.
-    # kind="stable" keeps two rounds on the same date in the order entered.
-    return rounds.sort_values("date", kind="stable").reset_index(drop=True)
-
-
-def save_round(r, path=ROUNDS_PATH):
-    """Validate one round and append it to the CSV. Returns the problem list."""
-    problems = validate_round(r)
-    if problems:
-        return problems
-
-    row = pd.DataFrame([r], columns=ROUND_COLUMNS)
-    # mode="a" APPENDS a row instead of overwriting the file. We only write
-    # the header line the very first time, when the file doesn't exist yet.
-    row.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
-    return []

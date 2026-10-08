@@ -1,4 +1,4 @@
-# Shared handicap / course helpers (Phase 8).
+# Shared handicap / course helpers.
 #
 # These make the tracker "course-aware". A round of 85 means something
 # very different on an easy par-70 municipal course than on a hard
@@ -12,139 +12,268 @@
 #     easiest possible and 155 the hardest.
 #
 # Every function here is plain arithmetic, no machine learning.
+#
+# Rounding rule used throughout: keep the full unrounded value for every
+# calculation, and round only when DISPLAYING a number - except where WHS
+# itself says to round (differentials are rounded to one decimal before
+# they're averaged into an index, see index_from_differentials).
 
-import pandas as pd
+from decimal import ROUND_HALF_UP, Decimal
 
-from benchmarks import expected_stat
+import numpy as np
 
-WHS_TABLE_PATH = "data/whs_differentials_table.csv"
+from rounds import is_blank
 
 # 113 is the WHS "standard" slope: the slope of a course of average
-# difficulty. Dividing slope by 113 says how much harder (>1) or easier
-# (<1) than average this course plays for a handicap golfer.
+# difficulty. slope / 113 says how much harder (>1) or easier (<1) than
+# average this course plays for a handicap golfer.
 STANDARD_SLOPE = 113
 
-# How many recent differentials the full WHS calculation looks at, and how
-# many of the best ones it averages.
+# How many recent rounds an index looks at.
 RECENT_ROUNDS = 20
-BEST_OF = 8
+
+# WHS Rule 5.2a: how an index is worked out from the differentials you have.
+#   number of differentials -> (how many of the LOWEST to average, adjustment)
+# Written out one line per count (rather than as ranges) so each line can
+# be checked against the rule's table directly. Fewer than 3 = no index.
+# Note: there is NO 0.96 multiplier - that belonged to the old (pre-2020)
+# USGA system and isn't part of WHS.
+WHS_TABLE = {
+    3: (1, -2.0),
+    4: (1, -1.0),
+    5: (1, 0.0),
+    6: (2, -1.0),
+    7: (2, 0.0),
+    8: (2, 0.0),
+    9: (3, 0.0),
+    10: (3, 0.0),
+    11: (3, 0.0),
+    12: (4, 0.0),
+    13: (4, 0.0),
+    14: (4, 0.0),
+    15: (5, 0.0),
+    16: (5, 0.0),
+    17: (6, 0.0),
+    18: (6, 0.0),
+    19: (7, 0.0),
+    20: (8, 0.0),
+}
+MIN_ROUNDS_FOR_INDEX = min(WHS_TABLE)  # 3
+
+ESTIMATE_LABEL = "ESTIMATED, not official"
 
 
+def round_half_up(value, decimals=0):
+    """
+    Round the way people (and golf scorecards) do: halves go UP.
+
+    Why not Python's round()? It uses "banker's rounding" (halves go to the
+    nearest EVEN number, so round(18.5) == 18), and floats can't store most
+    decimals exactly (12.55 is really 12.5499999...), so round(12.55, 1)
+    gives 12.5. Decimal(str(value)) works with the number as written, so
+    12.55 -> 12.6 and 18.5 -> 19.
+
+    Note: for negative (plus-handicap) numbers this rounds -0.5 to -1.0,
+    i.e. away from zero. Check how your association rounds plus handicaps.
+    """
+    step = Decimal(1).scaleb(-decimals)  # 0 -> 1, 1 -> 0.1
+    result = float(Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP))
+    return int(result) if decimals == 0 else result
+
+
+# =====================================================================
+# Course handicap
+# =====================================================================
 def course_handicap(index, slope, rating, par):
     """
     How many strokes this golfer "gets" on THIS course from THESE tees.
+    Returns the UNROUNDED value; round it only for display.
 
-    WHS formula: index x (slope / 113) + (course rating - par), rounded to a
-    whole number. The first part scales your index up on harder courses and
-    down on easier ones. The second part adjusts for courses where even a
-    scratch golfer is expected to score above or below par.
-    (Formula as commonly published; check it against your national golf
-    association's version.)
+    Formula, from the USGA's WHS FAQ (Rules of Handicapping 6.1 / 6.2):
+        course handicap = index x (slope / 113) + (course rating - par)
+
+    The first part scales your index up on harder courses and down on
+    easier ones. The second part adjusts for courses where even a scratch
+    golfer is expected to score above or below par.
+
+    CHECK: national associations adopted the (course rating - par) term at
+    different times, so make sure YOUR association uses this version.
+    expected_scores() below doesn't depend on that term at all - it uses
+    rating + index x slope / 113 directly.
     """
-    return round(index * slope / STANDARD_SLOPE + (rating - par))
+    return index * (slope / STANDARD_SLOPE) + (rating - par)
 
 
-def add_overshoot(benchmarks):
+# =====================================================================
+# Expected score
+# =====================================================================
+def fit_overshoot(benchmarks):
     """
-    Add an "overshoot" column: how many strokes ABOVE their handicap
-    golfers typically score in an average round.
+    Fit a straight line to "how far above their handicap golfers typically
+    score", using the six rows of the benchmark table.
 
-    Why this exists: a handicap index is built from your BEST 8 of your last
-    20 rounds, so it describes your good days, not your average day. Most
-    rounds come in a few strokes higher. The benchmark table shows this
-    directly: a 10-handicapper averages +10.88 to par, so their overshoot is
-    10.88 - 10 = 0.88.
+    Raw overshoot at each handicap = score_to_par - handicap. Those six raw
+    values wiggle (e.g. 0.88 at 10 hcp is lower than 1.33 at 5 hcp), which
+    is almost certainly sampling noise, not a real effect: there's no golf
+    reason 10-handicappers should overshoot less than 5-handicappers. A
+    straight line through all six points keeps the overall trend (higher
+    handicaps overshoot more) and smooths out the noise.
 
-    Assumption: this treats the benchmark's "score to par" as "score to
-    course rating", i.e. it assumes the benchmark courses were rated about
-    the same as their par. The source doesn't say.
+    np.polyfit(x, y, 1) finds the straight line y = slope * x + intercept
+    that sits closest to all the points (least squares - the same idea
+    LinearRegression used back in Phase 3, with one feature).
+
+    Returns a dict with the line and the range it's valid over.
     """
-    benchmarks = benchmarks.copy()  # don't change the caller's DataFrame
-    benchmarks["overshoot"] = benchmarks["score_to_par"] - benchmarks["hcp_mid"]
-    return benchmarks
+    x = benchmarks["hcp_mid"].to_numpy()
+    raw = benchmarks["score_to_par"].to_numpy() - x
+    slope, intercept = np.polyfit(x, raw, 1)
+    return {"slope": slope, "intercept": intercept, "low": x.min(), "high": x.max()}
 
 
-def expected_score(index, rating, slope, benchmarks):
+def fitted_overshoot(fit, index):
     """
-    What a golfer with this index would typically shoot on this course.
-
-        course rating            (what a scratch golfer shoots here)
-      + index x slope / 113      (extra strokes for your handicap, scaled
-                                  to how hard this course is for you)
-      + typical overshoot        (an average round, not one of your best 8;
-                                  interpolated from the benchmark file and
-                                  clamped to its 0-25 range)
-
-    `benchmarks` must already have the overshoot column (add_overshoot).
+    The fitted overshoot for this index. The index is clamped to the
+    table's 0-25 range first - we don't extend the line past the data we
+    fitted it on (same reasoning as expected_stat in benchmarks.py).
     """
-    overshoot = expected_stat(benchmarks, "overshoot", index)
-    return rating + index * slope / STANDARD_SLOPE + overshoot
+    clamped = min(max(index, fit["low"]), fit["high"])
+    return fit["slope"] * clamped + fit["intercept"]
 
 
-def score_differential(score, rating, slope):
+def expected_scores(index, rating, slope, fit):
+    """
+    Two expected scores for a golfer with this index on this course. Always
+    both - they answer different questions.
+
+    a) plays_to_handicap = course rating + index x slope / 113
+       What you'd shoot if you played exactly to your handicap. This is the
+       HEADLINE number: it comes straight from WHS definitions.
+
+    b) typical_round = plays_to_handicap + fitted overshoot
+       What golfers at your index typically shoot on an average day (an
+       index is built from your BEST rounds, so a typical round is higher).
+       This one is SOFT - roughly +/- 2 strokes - because:
+         - The benchmark overshoot was measured on real courses, whose
+           average slope is probably above 113. So part of that overshoot
+           is "courses are harder than standard", which the slope term in
+           (a) already covers. Adding it on top double counts a little.
+         - We don't know the benchmark courses' ratings: score_to_par
+           assumes rating ~ par there.
+    """
+    plays_to_handicap = rating + index * slope / STANDARD_SLOPE
+    typical_round = plays_to_handicap + fitted_overshoot(fit, index)
+    return {"plays_to_handicap": plays_to_handicap, "typical_round": typical_round}
+
+
+# =====================================================================
+# Score differential and estimated index
+# =====================================================================
+def score_differential(score, rating, slope, pcc=0.0, adjusted_score=None):
     """
     A round's score converted to "handicap units", so rounds on different
-    courses can be compared:  (113 / slope) x (score - course rating).
+    courses can be compared:
 
-    Simplified compared with official WHS:
-      - We use your gross score. Official WHS first caps each hole at
-        net double bogey (the "adjusted gross score"). We only log 18-hole
-        totals, not hole-by-hole scores, so we can't apply that cap. One
-        disaster hole will push the differential higher than WHS would.
-      - No Playing Conditions Calculation (the WHS weather/conditions
-        adjustment), which needs every golfer's scores that day.
+        differential = (113 / slope) x (adjusted score - course rating - pcc)
+
+    - adjusted_score: your score after the WHS net-double-bogey cap on
+      each hole. If you didn't enter it, we fall back to the gross score -
+      which runs HIGH after a blow-up hole.
+    - pcc: Playing Conditions Calculation, the WHS daily adjustment for
+      unusually hard/easy conditions (-1.0 to +3.0). Defaults to 0.
+
+    Returns the UNROUNDED value.
     """
-    return STANDARD_SLOPE / slope * (score - rating)
+    used_score = score if is_blank(adjusted_score) else adjusted_score
+    pcc = 0.0 if is_blank(pcc) else pcc
+    return (STANDARD_SLOPE / slope) * (used_score - rating - pcc)
 
 
-def load_whs_table(path=WHS_TABLE_PATH):
-    """Load the WHS 'rounds played -> differentials used' table (may be empty)."""
-    return pd.read_csv(path)
-
-
-def estimated_index(differentials, whs_table=None):
-    """
-    ESTIMATE a handicap index from score differentials, oldest first.
-    This is an estimate, not an official index (see score_differential for
-    what's simplified, and there are no WHS soft/hard caps here either).
-
-    Returns (value, explanation). value is None when it can't be computed.
-
-    - 20+ rounds: average of the best 8 of the most recent 20.
-    - Fewer than 20: the official WHS table says how many differentials to
-      use and what adjustment to apply. That table comes from the source
-      (data/whs_differentials_table.csv), never from memory. Until it's
-      filled in, there's no estimate under 20 rounds.
-    """
-    diffs = list(differentials)
-    n = len(diffs)
-
-    if n >= RECENT_ROUNDS:
-        recent = diffs[-RECENT_ROUNDS:]
-        best = sorted(recent)[:BEST_OF]  # lowest differentials = best rounds
-        value = round(sum(best) / BEST_OF, 1)
-        return value, f"Estimate: best {BEST_OF} of your last {RECENT_ROUNDS} rounds."
-
-    if whs_table is None:
-        whs_table = load_whs_table()
-
-    if len(whs_table) == 0:
-        return None, (
-            f"Only {n} round(s) logged. Under {RECENT_ROUNDS} rounds the estimate "
-            f"needs the official WHS table: paste it into {WHS_TABLE_PATH}."
-        )
-
-    # Find the table row whose "rounds played" range contains n.
-    row = whs_table[(whs_table["rounds_low"] <= n) & (whs_table["rounds_high"] >= n)]
-    if len(row) == 0:
-        return None, f"The WHS table has no index for {n} round(s)."
-
-    use = int(row["differentials_used"].iloc[0])
-    adjustment = float(row["adjustment"].fillna(0).iloc[0])
-    best = sorted(diffs)[:use]
-    value = round(sum(best) / use + adjustment, 1)
-    return value, (
-        f"Estimate: best {use} of {n} rounds"
-        + (f", adjustment {adjustment:+.1f}" if adjustment else "")
-        + " (WHS table)."
+def round_differential(r):
+    """score_differential() for one saved round (a dict or pandas row)."""
+    return score_differential(
+        r["score"], r["course_rating"], r["slope_rating"],
+        pcc=r.get("pcc"), adjusted_score=r.get("adjusted_score"),
     )
+
+
+def index_from_differentials(differentials):
+    """
+    Apply the WHS Rule 5.2a table to up to 20 differentials (any order).
+    Returns (value, explanation); value is None with fewer than 3.
+
+    Steps, exactly as the rule describes:
+      1. round each differential to one decimal,
+      2. sort them lowest first,
+      3. average the lowest N (N from WHS_TABLE) and add the adjustment,
+      4. round the result to one decimal.
+    """
+    diffs = sorted(round_half_up(d, 1) for d in differentials)
+    n = len(diffs)
+    if n < MIN_ROUNDS_FOR_INDEX:
+        return None, f"Need {MIN_ROUNDS_FOR_INDEX} rounds for an index (you have {n})."
+    if n > RECENT_ROUNDS:
+        raise ValueError(f"Pass at most {RECENT_ROUNDS} differentials.")
+
+    use, adjustment = WHS_TABLE[n]
+    lowest = diffs[:use]
+    value = round_half_up(sum(lowest) / use + adjustment, 1)
+
+    explanation = f"Lowest {use} of {n} differentials"
+    if adjustment:
+        explanation += f", adjustment {adjustment:+.1f}"
+    return value, explanation + "."
+
+
+def estimated_index(rounds):
+    """
+    ESTIMATED index from saved rounds (a DataFrame from storage.load_rounds).
+
+    Uses only 18-hole rounds - currently every saved round, since the
+    tracker only accepts 18-hole rounds. Takes the newest 20 by date and
+    applies the WHS table. See ESTIMATE_NOT_MODELLED for what's missing
+    compared with an official index.
+    """
+    newest = rounds.sort_values("date", kind="stable").tail(RECENT_ROUNDS)
+    differentials = [round_differential(row) for _, row in newest.iterrows()]
+    return index_from_differentials(differentials)
+
+
+# Shown in the app next to every estimated index.
+ESTIMATE_NOT_MODELLED = [
+    "net double bogey cap, for rounds with no adjusted score entered "
+    "(the estimate runs HIGH after a blow-up hole)",
+    "exceptional score reductions",
+    "soft and hard caps (limits on how fast an index can rise)",
+]
+
+
+# =====================================================================
+# Hand-checked examples. Run:  python handicap.py
+# =====================================================================
+# Each expected answer was worked out by hand (shown in the comment), so
+# if a future edit breaks the maths, this fails loudly.
+if __name__ == "__main__":
+    # 15 x 130/113 = 17.257...; + (73.5 - 72) = 18.757... -> 18.76, displays as 19
+    ch = course_handicap(15, 130, 73.5, 72)
+    assert round_half_up(ch, 2) == 18.76, ch
+    assert round_half_up(ch) == 19, ch
+
+    # 113/130 x (90 - 72.0 - 0) = 0.8692 x 18 = 15.646 -> 15.6
+    d = score_differential(90, 72.0, 130, pcc=0)
+    assert round_half_up(d, 1) == 15.6, d
+
+    # 3 differentials: lowest 1 (15.2) + adjustment -2.0 = 13.2
+    assert index_from_differentials([15.3, 15.2, 16.6])[0] == 13.2
+
+    # 6 differentials: avg of lowest 2 = (12.0 + 13.0) / 2 = 12.5; - 1.0 = 11.5
+    assert index_from_differentials([12.0, 13.0, 14.0, 15.0, 16.0, 17.0])[0] == 11.5
+
+    # Halves round UP: (12.0 + 13.1) / 2 = 12.55 -> 12.6 (Python's round gives 12.5)
+    assert index_from_differentials([12.0, 13.1, 14.0, 15.0, 16.0, 17.0, 18.0])[0] == 12.6
+    assert round_half_up(18.5) == 19
+
+    # Fewer than 3 -> no index
+    assert index_from_differentials([10.0, 11.0])[0] is None
+
+    print("All hand-checked handicap examples pass.")
