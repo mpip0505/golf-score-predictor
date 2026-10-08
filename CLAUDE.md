@@ -21,30 +21,17 @@ FINDINGS.md, and delete it from this list. Don't resolve any of these yourself. 
 the user's choice or an official source they provide. Also run `git status` and mention any
 uncommitted work.
 
-**Needs checking against official sources** (never fill in from memory):
-1. WHS differential formula `113/slope × (adjusted − rating − PCC)` and the Rule 5.2a table
-   (`WHS_TABLE` in `handicap.py`): confirm against the official WHS text.
-2. Course handicap's `(rating − par)` term: does the user's national association use it, and since
-   when? (`course_handicap()` in `handicap.py`)
-3. Plus-handicap rounding: `round_half_up()` rounds −0.5 to −1 (away from zero). Confirm the
-   association's rule.
-4. Benchmark values to check against the Shot Scope eBook (`data/handicap_benchmarks.csv`):
-   fairways % rises to 49 at 10 hcp, putts tie at 15/20 hcp (33.1), and GIR drops 17 points from
-   0 to 5 hcp.
-5. Benchmark stat definitions in the eBook: scrambling denominator (missed greens?), whether putts
-   from the fringe count, and how fairways % is counted. These decide whether the Tour comparison
-   in Phase 7 is fair.
-6. Is the benchmark "handicap" a Handicap Index or a course handicap? (Currently assumed: index.)
+**Needs checking against official sources** (never fill in from memory). Items 1, 3 and 4 were
+checked on 2026-10-08 (see FINDINGS.md, "Phase 9 corrections") and removed:
+2. Course handicap's `(rating − par)` term matches the USGA FAQ formula. Still open: which national
+   association does the user play under, and has it used this term for all of their rounds?
+5. The eBook doesn't define "Up & Down %" (its denominator) or how fairways % treats par 3s.
+   Putts ARE defined: only strokes on the green count, the same as the Tour.
+6. The eBook doesn't say whether "handicap" means a WHS Handicap Index, and its data predates WHS.
+   The code treats it as an approximate index.
 
-**Needs the user's choice:**
-7. `GIR_CONFOUND_RATIO = 0.7` (`strokes_config.py`): as a ratio it triggers with ~3.3 greens of
-   margin at scratch but only ~0.5 at 25 hcp. Keep it, or switch to an absolute gap?
-8. Blank PCC is saved as 0.0, so "unknown" and "zero" can't be told apart later. OK?
-9. Import is all-or-nothing and skips rows that exactly match an existing round. OK?
-10. `FAIRWAY_MISS_STROKES = 0.0`: revisit once enough of the user's own rounds exist?
-11. 3-putts are logged but not scored, because there's no benchmark. Find a source, or leave it?
-12. Overshoot uses a straight-line fit and "typical round" is labelled ±2 strokes. Accept, or
-    try something else?
+**Needs the user's choice** (items 7–12 were decided on 2026-10-08, see FINDINGS.md "Phase 9
+decisions", and removed):
 13. Phase 10 is not defined yet. The earlier idea was a personal model learned from the user's own
     rounds. Agree on its scope and the minimum number of rounds before starting.
 14. Older open questions at the bottom of FINDINGS.md: tune the Random Forest, try a season-based
@@ -103,7 +90,7 @@ no three-putt data. Never fill in or "fix" its numbers from memory. They come fr
 so never commit it, and never create test rounds in it: run checks on a scratch copy.
 `data/my_rounds.example.csv` is the header-only template. Round fields are listed in
 `ROUND_COLUMNS` in `rounds.py`. `length_yards`, `adjusted_score` (blank = use gross score) and
-`pcc` (blank = 0, range −1.0…+3.0) are optional, and older CSVs without them must still load.
+`pcc` (blank = unknown, stored blank and used as 0; only −1, 0, +1, +2, +3) are optional, and older CSVs without them must still load.
 
 WHS constants and formulas come only from official sources the user provides. Never recall or
 substitute them from memory.

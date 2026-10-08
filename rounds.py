@@ -38,7 +38,7 @@ ROUND_COLUMNS = [
     "up_down_saves",      # ...and how many of those you did
     "penalties",
     "adjusted_score",     # optional: score after the WHS net-double-bogey cap
-    "pcc",                # optional: WHS Playing Conditions Calculation, default 0
+    "pcc",                # optional: WHS Playing Conditions Calculation (blank = unknown)
 ]
 
 # Columns you may leave blank, and what a blank means. None = "stays
@@ -46,7 +46,10 @@ ROUND_COLUMNS = [
 OPTIONAL_DEFAULTS = {
     "length_yards": None,
     "adjusted_score": None,  # blank -> differential uses the gross score
-    "pcc": 0.0,              # blank -> no conditions adjustment
+    # pcc stays BLANK when you don't know it, so "unknown" and "it was 0"
+    # stay different in your records (you can look it up and fill it in
+    # later). Calculations treat blank as 0 - see score_differential().
+    "pcc": None,
 }
 
 
@@ -63,7 +66,7 @@ def add_missing_columns(rounds):
 
     A CSV saved before adjusted_score and pcc existed simply doesn't have
     those columns. Instead of failing, we add them, filled with their
-    default (blank, or 0 for pcc). Then every later step can assume all
+    default (blank). Then every later step can assume all
     ROUND_COLUMNS are there.
     """
     rounds = rounds.copy()
@@ -154,8 +157,10 @@ def validate_round(r):
         if adjusted < r["par"] - 15:
             problems.append("Adjusted score looks wrong for 18 holes - please check it.")
 
+    # PCC only ever takes the values -1, 0, +1, +2 or +3 (USGA FAQ "What
+    # is a Score Differential"), so a decimal like 1.5 must be a typo.
     pcc = r.get("pcc")
-    if not is_blank(pcc) and not -1.0 <= pcc <= 3.0:
-        problems.append("PCC must be between -1.0 and +3.0.")
+    if not is_blank(pcc) and pcc not in (-1, 0, 1, 2, 3):
+        problems.append("PCC must be one of -1, 0, +1, +2 or +3.")
 
     return problems

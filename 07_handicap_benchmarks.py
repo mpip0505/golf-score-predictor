@@ -124,9 +124,10 @@ tour_means = {
     "fairways_pct": tour_clean["Fairway Percentage"].mean(),
     # Standard definition on both sides: on the green in (par - 2) shots.
     "gir_pct": tour_clean["gir"].mean(),
-    # Per round on both sides. But the Tour only counts strokes ON the
-    # green as putts; amateurs (and some trackers) may count a putter from
-    # the fringe as a putt too, which inflates amateur putt counts.
+    # Per round on both sides, and both count only strokes ON the green:
+    # the Shot Scope eBook says a stroke from the fringe is not a putt
+    # ("the shot from the fringe is classed as 1 putt" when the golfer
+    # took 2 strokes from there). Same definition as the Tour.
     "putts_per_round": tour_clean["Average Putts"].mean(),
     # Tour definition: % of MISSED greens where the player still made par
     # or better. If Shot Scope's denominator differs, this isn't a fair

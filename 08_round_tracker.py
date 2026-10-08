@@ -91,7 +91,11 @@ with st.form("log_round", clear_on_submit=True):
         "Fairways possible (par 4s + 5s)", value=None, step=1
     )
     gir = col1.number_input("Greens in regulation", value=None, step=1)
-    putts = col2.number_input("Total putts", value=None, step=1)
+    # Same definition as the benchmark (Shot Scope) and the Tour: a stroke
+    # with the putter from the fringe is NOT a putt.
+    putts = col2.number_input("Total putts", value=None, step=1,
+                              help="Only strokes taken on the green. "
+                                   "A putter from the fringe doesn't count.")
     three_putts = col3.number_input("3-putts", value=None, step=1)
     up_down_attempts = col1.number_input("Up-and-down attempts", value=None, step=1)
     up_down_saves = col2.number_input("Up-and-down saves", value=None, step=1)
@@ -104,8 +108,9 @@ with st.form("log_round", clear_on_submit=True):
         help="Leave blank to use your gross score.",
     )
     pcc = col2.number_input(
-        "PCC (playing conditions, -1.0 to +3.0)", value=0.0, step=1.0, format="%.1f",
-        help="Leave at 0 if you don't know it.",
+        "PCC (playing conditions: -1, 0, +1, +2 or +3)", value=None, step=1,
+        help="Leave blank if you don't know it - it's saved as unknown and "
+             "counted as 0 in the differential. Fill it in later if you find it.",
     )
 
     submitted = st.form_submit_button("Save round")

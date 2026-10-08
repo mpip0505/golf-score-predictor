@@ -18,7 +18,7 @@
 # itself says to round (differentials are rounded to one decimal before
 # they're averaged into an index, see index_from_differentials).
 
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_DOWN, ROUND_HALF_UP, Decimal
 
 import numpy as np
 
@@ -60,6 +60,10 @@ WHS_TABLE = {
 }
 MIN_ROUNDS_FOR_INDEX = min(WHS_TABLE)  # 3
 
+# WHS maximum Handicap Index (USGA Rule 5.2a: an initial index calculated
+# above 54.0 is allocated 54.0).
+MAX_INDEX = 54.0
+
 ESTIMATE_LABEL = "ESTIMATED, not official"
 
 
@@ -73,11 +77,16 @@ def round_half_up(value, decimals=0):
     gives 12.5. Decimal(str(value)) works with the number as written, so
     12.55 -> 12.6 and 18.5 -> 19.
 
-    Note: for negative (plus-handicap) numbers this rounds -0.5 to -1.0,
-    i.e. away from zero. Check how your association rounds plus handicaps.
+    Plus handicaps (stored as NEGATIVE numbers here) round TOWARD ZERO on a
+    half: -0.5 -> 0 and -1.5 -> -1. That follows the USGA's own example
+    (Rules of Handicapping, Appendix C: "+0.5 ... rounds to ... 0") - i.e.
+    ".5 rounded upwards" means toward the higher number, which for a
+    negative value is toward zero. Decimal's ROUND_HALF_UP would go AWAY
+    from zero (-0.5 -> -1), so negatives use ROUND_HALF_DOWN instead.
     """
     step = Decimal(1).scaleb(-decimals)  # 0 -> 1, 1 -> 0.1
-    result = float(Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP))
+    mode = ROUND_HALF_UP if value >= 0 else ROUND_HALF_DOWN
+    result = float(Decimal(str(value)).quantize(step, rounding=mode))
     return int(result) if decimals == 0 else result
 
 
@@ -222,6 +231,9 @@ def index_from_differentials(differentials):
     explanation = f"Lowest {use} of {n} differentials"
     if adjustment:
         explanation += f", adjustment {adjustment:+.1f}"
+    if value > MAX_INDEX:
+        value = MAX_INDEX
+        explanation += f", capped at the WHS maximum {MAX_INDEX}"
     return value, explanation + "."
 
 
@@ -272,6 +284,20 @@ if __name__ == "__main__":
     # Halves round UP: (12.0 + 13.1) / 2 = 12.55 -> 12.6 (Python's round gives 12.5)
     assert index_from_differentials([12.0, 13.1, 14.0, 15.0, 16.0, 17.0, 18.0])[0] == 12.6
     assert round_half_up(18.5) == 19
+
+    # Plus handicaps round toward zero on a half (USGA Appendix C example:
+    # +0.5 -> 0; 50% of +3 = +1.5 -> +1). Stored as negatives here.
+    assert round_half_up(-0.5) == 0
+    assert round_half_up(-1.5) == -1
+    assert round_half_up(-2.25, 1) == -2.2
+
+    # USGA Handicap Manual example: AGS 95, rating 71.5, slope 125 ->
+    # 23.5 x 113 / 125 = 21.24 -> 21.2; and 69 on the same course -> -2.3.
+    assert round_half_up(score_differential(95, 71.5, 125), 1) == 21.2
+    assert round_half_up(score_differential(69, 71.5, 125), 1) == -2.3
+
+    # Index above 54.0 is capped at 54.0.
+    assert index_from_differentials([60.0, 61.0, 62.0])[0] == 54.0
 
     # Fewer than 3 -> no index
     assert index_from_differentials([10.0, 11.0])[0] is None

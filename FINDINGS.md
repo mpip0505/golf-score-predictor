@@ -233,10 +233,10 @@ correctly) refuse to answer. This confirms the PGA model can't serve as an amate
 - **Tracker-user bias.** Shot Scope's data comes from golfers who buy and wear a shot-tracking
   device. They're likely more engaged (and maybe more consistent) than the average golfer at the
   same handicap.
-- **Definition mismatches with the tour data.** Shot Scope doesn't state its definitions, so these
-  are unverified. Scrambling needs the same denominator (missed greens) on both sides. Putts may
-  differ: the Tour counts only strokes on the green, while trackers may count putts from the
-  fringe. Fairways % may handle par 3s or fairway edges differently. The 0-hcp fairway figure (50%)
+- **Definition mismatches with the tour data.** Shot Scope doesn't state most of its definitions,
+  so these are unverified. Scrambling needs the same denominator (missed greens) on both sides.
+  Fairways % may handle par 3s or fairway edges differently. (Putts were later confirmed to match:
+  the eBook counts only strokes on the green, the same as the Tour. See Phase 9 corrections.) The 0-hcp fairway figure (50%)
   vs the Tour's 61% is a bigger gap than GIR's (61% vs 66%), which hints at a definition gap and
   not only a skill gap.
 - **Handicap index vs course handicap.** The table is keyed by "handicap", but it's not stated
@@ -338,11 +338,51 @@ All tests (old-format CSV, save, import with bad/good/duplicate rows, form submi
 putting ranking, empty state) ran headless on a scratch copy. The real `data/my_rounds.csv` was
 never created.
 
+**Phase 9 corrections, checked against official sources on 2026-10-08:**
+- **Confirmed:** the Rule 5.2a table (USGA Rule 5.2a page, including its 15.3/15.2/16.6 → 13.2
+  example), the differential formula and its rounding to the nearest tenth with .5 up (USGA FAQ
+  "What is a Score Differential"), and the course handicap formula (USGA FAQ "Calculate Course
+  Handicap").
+- **Bug fixed:** `round_half_up` rounded plus handicaps (stored as negatives) *away* from zero,
+  −0.5 → −1. USGA Appendix C's example rounds +0.5 to 0 and +1.5 to +1, i.e. toward zero.
+  Negatives now use `ROUND_HALF_DOWN`, with asserts for −0.5, −1.5 and −2.25.
+- **Added:** the WHS maximum index of 54.0 (Rule 5.2a), as a cap with an assert.
+- **Tightened:** PCC can only be −1, 0, +1, +2 or +3 (USGA FAQ). Validation and the form now
+  reject decimals.
+- **New asserts** from the USGA Handicap Manual example: 95 on 71.5/125 → 21.2, and 69 → −2.3.
+- **Shot Scope eBook** (shotscope.com/ebook/Strokes_Gained.pdf), checked:
+  - Every benchmark value matches the CSV, including the odd fairway 49 at 10 hcp and the putts
+    tie at 15/20. They are not typos.
+  - The book's "Difference v Handicap" row equals our raw overshoot.
+  - Putts count only on the green (a fringe stroke isn't a putt), the same as the Tour. The form
+    now says so.
+  - Not defined in the book: the up & down denominator, fairway rules for par 3s, and whether
+    "handicap" means a WHS index. The data predates WHS.
+
+**Phase 9 decisions (2026-10-08)**, settled by Claude after the user asked it to go ahead:
+- **#7 Putting confound rule: kept the 0.7 ratio.** At high handicaps the rule is sensitive. At
+  25 hcp it flags an average below 1.26 greens against a benchmark of 1.8, a gap of only ~0.5
+  greens, and that small a gap barely changes putt counts. But a false flag only *re-orders*
+  putting below penalties and short game and adds a label; no strokes change. High handicappers
+  usually lose more to those two anyway. An absolute gap (e.g. 2 greens) would follow the
+  mechanism more closely, so it's the fallback if the flag proves noisy in real rounds.
+- **#8 Blank PCC: now stored blank.** It's used as 0 in calculations, so "unknown" and "0" stay
+  different in the CSV, and old CSVs load with blank PCC. Previously a blank was saved as 0.0.
+- **#9 Import: kept all-or-nothing, skipping exact duplicates.** A partial import is harder to
+  undo than a rejected file that you fix and re-import.
+- **#10 Fairway cost: kept at 0.** Revisit in Phase 10 by checking whether the user's own
+  fairway % relates to their score.
+- **#11 3-putts: still logged, still not scored.** There's no benchmark, and the eBook has no
+  3-putt data. A source can be added later.
+- **#12 Overshoot: accepted the straight-line fit and the "roughly ±2" label.** The fit's
+  residuals are at most 0.94 strokes, and the double counting with the slope term is documented,
+  so ±2 is an honest, rough band.
+
 **Unverified, for the user to check:**
 - whether your national association uses the (rating − par) term in course handicap, and since
   when;
 - the differential formula and the Rule 5.2a table, against the official WHS text;
-- how plus handicaps round (`round_half_up` rounds −0.5 away from zero).
+- (plus-handicap rounding: resolved, see Phase 9 corrections above).
 
 **Other weak assumptions:**
 - Per-stat gaps ignore course difficulty, so on a hard course every area looks worse.
