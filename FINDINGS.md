@@ -168,6 +168,84 @@ Phase 3–5's model stands unchanged and the Streamlit app keeps its 5 sliders. 
 negative one: there's no free lunch in this CSV — the only columns that would raise our score are
 derived from the answer, which is why they were left out in Phase 2 in the first place.
 
+## Phase 7 — Amateur handicap benchmarks + tour reference (`07_handicap_benchmarks.py`, `benchmarks.py`)
+
+**Change of direction.** The goal is now helping an *amateur* find which part of their game costs
+the most strokes. The main reference is `data/handicap_benchmarks.csv` (Shot Scope Strokes Gained
+eBook, 4th ed, 2021). The PGA data is now a secondary "tour reference" and is never used to
+predict an amateur's score.
+
+**The benchmark table** (blank = not in source; Tour = mean of the 1,678 clean PGA rows):
+
+| Stat | 0 | 5 | 10 | 15 | 20 | 25 | Tour |
+|---|---|---|---|---|---|---|---|
+| Score to par | 0.83 | 6.33 | 10.88 | 17.38 | 21.69 | 28.97 | — |
+| Fairways % | 50 | 48 | 49 | 48 | 46 | 46 | 61.44 |
+| GIR % | 61 | 44 | 36 | 24 | 17 | 10 | 65.66 |
+| Putts / round | 29.4 | 30.2 | 31.2 | 33.1 | 33.1 | 33.8 | 29.16 |
+| Scrambling % | 47 | 41 | 31 | 21 | 20 | 18 | 58.12 |
+| Penalties / round | 0.56 | 0.91 | 1.62 | 2.45 | 3.03 | 4.67 | — |
+| 3-putts / round | — | — | — | — | — | — | — |
+
+Schema notes: the source reports **score to par** (not raw score), so the column is
+`score_to_par` instead of the planned `avg_score`. Converting would mean assuming a par of 72.
+The source also gives single handicaps, not bands, so `hcp_low = hcp_high = hcp_mid`.
+
+**Trend check** (reported, not "fixed"):
+- Score to par, GIR, scrambling and penalties all move strictly in the expected direction.
+- **Fairways % is not monotonic** (50, 48, **49**, 48, 46, 46). It's nearly flat across the whole
+  range: a 25-handicapper hits only 4 points fewer fairways than a scratch golfer. That's
+  plausibly real (amateur accuracy doesn't vary much with skill) and matches Phase 4's finding
+  that fairway % was the least important stat. It does mean fairways % alone can't tell
+  handicaps apart.
+- **Putts / round ties at 15 and 20** (33.1, 33.1).
+- **GIR drops 17 points from 0 to 5 hcp**, the biggest step in the table. Worth checking against
+  the source.
+- Putts per round **rise** with handicap partly *because* GIR falls. A player who misses the green
+  and chips close takes fewer putts on that hole, so raw putts mix putting skill with approach
+  play. This is a known weakness of putts per round as a stat.
+
+**Interpolation.** `expected_stat(benchmarks, stat, handicap)` draws straight lines between the
+six anchors (e.g. GIR at 12 hcp = 31.2%) and **clamps** outside 0–25. Extrapolating would be
+nonsense: extending the 20→25 GIR slope out to a 40 handicap gives negative GIR.
+
+**4-feature tour model** (no `Avg Distance`, since amateurs rarely know their real distance).
+Same 5-fold CV setup as Phase 4.5:
+
+| Model | R² (mean ± std) | RMSE (mean ± std) |
+|---|---|---|
+| 5 features (Phase 4.5) | 0.678 ± 0.056 | 0.391 ± 0.014 |
+| 4 features, no distance | 0.635 ± 0.062 | 0.416 ± 0.015 |
+
+Dropping distance costs about 0.04 R² and 0.025 strokes of RMSE. Distance does carry some
+information that the other four stats don't, but most of the model survives without it.
+
+**Range guard.** The tour model trained on GIR 53.5–73.5%, putts 27.5–31.0, scrambling
+44.0–69.3% and fairways 43.0–76.9%. `inside_tour_range()` refuses any input outside those ranges.
+Run against the benchmark table, **only the 0-handicap row is inside**. Every other handicap has
+2–3 of the 4 features out of range, so for real amateurs the tour model will almost always (and
+correctly) refuse to answer. This confirms the PGA model can't serve as an amateur predictor.
+
+**Weakest assumptions, to keep in mind for Phase 8+:**
+- **Benchmarks are ballpark.** They come from one source and one year, with no spread given. A
+  single average per handicap hides how much golfers at the same handicap differ. "You're 5% below
+  your band's GIR" may well be within normal variation.
+- **Tracker-user bias.** Shot Scope's data comes from golfers who buy and wear a shot-tracking
+  device. They're likely more engaged (and maybe more consistent) than the average golfer at the
+  same handicap.
+- **Definition mismatches with the tour data.** Shot Scope doesn't state its definitions, so these
+  are unverified. Scrambling needs the same denominator (missed greens) on both sides. Putts may
+  differ: the Tour counts only strokes on the green, while trackers may count putts from the
+  fringe. Fairways % may handle par 3s or fairway edges differently. The 0-hcp fairway figure (50%)
+  vs the Tour's 61% is a bigger gap than GIR's (61% vs 66%), which hints at a definition gap and
+  not only a skill gap.
+- **Handicap index vs course handicap.** The table is keyed by "handicap", but it's not stated
+  whether that's the WHS Handicap Index or the course handicap for the day. On a hard course these
+  can differ by several strokes. Phase 8 should ask for the Handicap Index and say so.
+- **Score to par isn't course-adjusted.** A 0-hcp averages +0.83 because handicaps are measured
+  against course rating, not par. Comparisons across courses of different difficulty will be
+  noisy.
+
 ## Open questions for later phases
 
 - Phase 4's "Random Forest loses" verdict was measured against an **untuned** forest with no

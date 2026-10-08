@@ -17,3 +17,6 @@ __pycache__/
 # Editors
 .vscode/
 .idea/
+
+# Personal round log (Phase 8+) - private data, never commit
+data/my_rounds.csv

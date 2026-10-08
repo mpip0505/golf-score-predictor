@@ -1,0 +1,7 @@
+band_label,hcp_low,hcp_high,hcp_mid,score_to_par,fairways_pct,gir_pct,putts_per_round,three_putts_per_round,scramble_pct,penalties_per_round,source,source_year,notes
+0 hcp,0,0,0,0.83,50,61,29.4,,47,0.56,Shot Scope Strokes Gained eBook 4th ed,2021,Point estimate at this handicap (source gives no band bounds); three_putts not in source
+5 hcp,5,5,5,6.33,48,44,30.2,,41,0.91,Shot Scope Strokes Gained eBook 4th ed,2021,Point estimate at this handicap (source gives no band bounds); three_putts not in source
+10 hcp,10,10,10,10.88,49,36,31.2,,31,1.62,Shot Scope Strokes Gained eBook 4th ed,2021,Point estimate at this handicap (source gives no band bounds); three_putts not in source
+15 hcp,15,15,15,17.38,48,24,33.1,,21,2.45,Shot Scope Strokes Gained eBook 4th ed,2021,Point estimate at this handicap (source gives no band bounds); three_putts not in source
+20 hcp,20,20,20,21.69,46,17,33.1,,20,3.03,Shot Scope Strokes Gained eBook 4th ed,2021,Point estimate at this handicap (source gives no band bounds); three_putts not in source
+25 hcp,25,25,25,28.97,46,10,33.8,,18,4.67,Shot Scope Strokes Gained eBook 4th ed,2021,Point estimate at this handicap (source gives no band bounds); three_putts not in source

@@ -57,10 +57,27 @@ Known data quirks:
   `Average Score = 71.07 - Average SG Total` to within ±0.19 strokes, and the four components sum
   to that total. See FINDINGS.md Phase 6 before reaching for them again.
 
+`data/handicap_benchmarks.csv` — amateur average stats by handicap (0, 5, 10, 15, 20, 25), from
+the Shot Scope Strokes Gained eBook 4th ed (2021). It holds score *to par* (not raw score) and has
+no three-putt data. Never fill in or "fix" its numbers from memory. They come from the source only.
+
+`data/my_rounds.csv` (Phase 8+, gitignored) — the user's own logged rounds. This is personal data,
+so never commit it.
+
+## Amateur feature: design principle
+
+From Phase 7 on, the **handicap benchmarks and the user's own rounds are the main engine**. The
+PGA data and its models are a secondary "tour reference" only. The tour model must never produce
+an amateur score prediction, and must never be used on inputs outside its training range (see
+`inside_tour_range()` in `benchmarks.py`). Almost every amateur falls outside that range.
+
 ## Conventions
 
 - Phase scripts are numbered at the project root (`01_explore_data.py`, `02_...`, etc.) so the
   build-up is visible in the file listing itself — don't reorganize into a package/src layout.
+- Shared helpers are unnumbered root files: `benchmarks.py` (load/validate the benchmark CSV,
+  `expected_stat()` interpolation with clamping, tour range guard).
+- Don't touch `web/` as part of the amateur feature.
 - Comment code heavily; explain the "why" of each pandas/sklearn call, not just what it does.
 
 ## Status
@@ -72,6 +89,9 @@ Known data quirks:
 - [x] Phase 4.5: Cross-validate both models on the full dataset to confirm the comparison is robust
 - [x] Phase 5: Build Streamlit app (sliders per stat, live prediction, feature-importance chart)
 - [x] Phase 6: Test the Strokes Gained columns as features — rejected, they leak the target
+- [x] Phase 7: Amateur handicap benchmarks (Shot Scope), interpolation helper, tour reference
+      column, 4-feature tour model with range guard
+- [ ] Phase 8: Round logger + "which part of my game needs fixing" report (not started)
 
 See `FINDINGS.md` for the detailed results and interpretation from each phase, including a
 noteworthy result: the Random Forest overfits (train R² 0.945 vs test R² 0.697) and is actually
