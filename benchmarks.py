@@ -113,7 +113,9 @@ def expected_stat(benchmarks, stat, handicap):
 
     Returns NaN if the source has no numbers for this stat at all.
     """
-    if stat not in STAT_COLUMNS:
+    # Any numeric column works, not just the ones in the CSV - handicap.py
+    # adds a derived "overshoot" column and looks it up the same way.
+    if stat not in benchmarks.columns:
         raise ValueError(f"Unknown stat {stat!r}. Choose from {STAT_COLUMNS}")
 
     # Only use rows where this stat is actually filled in.

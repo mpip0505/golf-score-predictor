@@ -24,7 +24,8 @@ for the user to review before continuing to the next.
 ```
 source venv/bin/activate      # activate the venv (do this before running anything)
 python 01_explore_data.py     # run a phase script
-streamlit run app.py          # run the Streamlit app (once it exists, see Phase 5)
+streamlit run app.py          # run the PGA predictor app (Phase 5)
+streamlit run 08_round_tracker.py   # run the personal round tracker (Phase 8)
 ```
 
 ## Dataset
@@ -61,6 +62,10 @@ Known data quirks:
 the Shot Scope Strokes Gained eBook 4th ed (2021). It holds score *to par* (not raw score) and has
 no three-putt data. Never fill in or "fix" its numbers from memory. They come from the source only.
 
+`data/whs_differentials_table.csv` — the official WHS "rounds played → differentials used +
+adjustment" table for under 20 rounds. Header-only until the user pastes it. Never fill it from
+memory.
+
 `data/my_rounds.csv` (Phase 8+, gitignored) — the user's own logged rounds. This is personal data,
 so never commit it.
 
@@ -76,7 +81,11 @@ an amateur score prediction, and must never be used on inputs outside its traini
 - Phase scripts are numbered at the project root (`01_explore_data.py`, `02_...`, etc.) so the
   build-up is visible in the file listing itself — don't reorganize into a package/src layout.
 - Shared helpers are unnumbered root files: `benchmarks.py` (load/validate the benchmark CSV,
-  `expected_stat()` interpolation with clamping, tour range guard).
+  `expected_stat()` interpolation with clamping, tour range guard), `rounds.py` (round schema,
+  validation, save/load), `handicap.py` (course handicap, expected score, differential, estimated
+  index), `strokes_lost.py` (per-area breakdown), `strokes_config.py` (named conversion constants).
+- Strokes-lost constants live only in `strokes_config.py`. Ask the user before changing any of
+  them. GIR/fairway/putt benchmarks are never scaled by slope or length.
 - Don't touch `web/` as part of the amateur feature.
 - Comment code heavily; explain the "why" of each pandas/sklearn call, not just what it does.
 
@@ -91,7 +100,8 @@ an amateur score prediction, and must never be used on inputs outside its traini
 - [x] Phase 6: Test the Strokes Gained columns as features — rejected, they leak the target
 - [x] Phase 7: Amateur handicap benchmarks (Shot Scope), interpolation helper, tour reference
       column, 4-feature tour model with range guard
-- [ ] Phase 8: Round logger + "which part of my game needs fixing" report (not started)
+- [x] Phase 8: Course-aware round tracker + strokes-lost weakness report
+      (`streamlit run 08_round_tracker.py`); WHS table for <20 rounds still to be pasted
 
 See `FINDINGS.md` for the detailed results and interpretation from each phase, including a
 noteworthy result: the Random Forest overfits (train R² 0.945 vs test R² 0.697) and is actually
