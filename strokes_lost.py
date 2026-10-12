@@ -20,7 +20,7 @@ import pandas as pd
 
 import strokes_config as cfg
 from benchmarks import expected_stat
-from rounds import HOLES
+from rounds import HOLES, full_rounds
 
 PUTTING = "Putting"
 # The areas putting may never outrank when it's flagged as confounded.
@@ -34,6 +34,11 @@ def strokes_lost(r, benchmarks):
     area, yours, typical (benchmark at your index), strokes_lost, counted,
     confidence, note.
     """
+    # The benchmarks are per 18 holes, so a 9-hole round can't be compared
+    # with them. The app only passes 18-hole rounds; this guards mistakes.
+    if r["holes"] != HOLES:
+        raise ValueError("strokes_lost() only works on 18-hole rounds.")
+
     index = r["handicap_index"]
 
     # Benchmarks at your index (interpolated, clamped to the 0-25 range).
@@ -120,6 +125,30 @@ def strokes_lost(r, benchmarks):
     return pd.DataFrame(rows)
 
 
+def average_strokes_lost(rounds, benchmarks):
+    """
+    Average strokes lost per area across ALL your 18-hole rounds.
+
+    One round is noisy (a single bad hole can dominate it); averaging over
+    many rounds shows your real pattern. Returns a DataFrame with area,
+    strokes_lost and counted, ready for rank_areas(). Only the "counted"
+    areas are included (driving's cost is 0, so it's left out).
+    """
+    full = full_rounds(rounds)
+    # One breakdown per round, stacked into one long table...
+    all_breakdowns = pd.concat([strokes_lost(row, benchmarks) for _, row in full.iterrows()])
+    # ...then grouped by area and averaged. sort=False keeps the areas in
+    # the order strokes_lost() lists them.
+    average = (
+        all_breakdowns[all_breakdowns["counted"]]
+        .groupby("area", sort=False)
+        .agg(strokes_lost=("strokes_lost", "mean"))
+        .reset_index()
+    )
+    average["counted"] = True
+    return average
+
+
 def putting_confound(rounds, benchmarks):
     """
     Is putting confounded by GIR for this player? Judged on the AVERAGE over
@@ -131,6 +160,7 @@ def putting_confound(rounds, benchmarks):
     Returns (flag, message). flag is True / False, or None when there are
     too few rounds to judge.
     """
+    rounds = full_rounds(rounds)  # GIR out of 18 only makes sense for 18 holes
     n = len(rounds)
     if n < cfg.MIN_ROUNDS_FOR_CONFOUND_CHECK:
         return None, (f"GIR/putting check needs {cfg.MIN_ROUNDS_FOR_CONFOUND_CHECK} "

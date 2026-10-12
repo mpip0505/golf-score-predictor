@@ -21,10 +21,8 @@ FINDINGS.md, and delete it from this list. Don't resolve any of these yourself. 
 the user's choice or an official source they provide. Also run `git status` and mention any
 uncommitted work.
 
-**Needs checking against official sources** (never fill in from memory). Items 1, 3 and 4 were
+**Needs checking against official sources** (never fill in from memory). Items 1–4 were
 checked on 2026-10-08 (see FINDINGS.md, "Phase 9 corrections") and removed:
-2. Course handicap's `(rating − par)` term matches the USGA FAQ formula. Still open: which national
-   association does the user play under, and has it used this term for all of their rounds?
 5. The eBook doesn't define "Up & Down %" (its denominator) or how fairways % treats par 3s.
    Putts ARE defined: only strokes on the green count, the same as the Tour.
 6. The eBook doesn't say whether "handicap" means a WHS Handicap Index, and its data predates WHS.
@@ -50,7 +48,12 @@ source venv/bin/activate      # activate the venv (do this before running anythi
 python 01_explore_data.py     # run a phase script
 streamlit run app.py          # run the PGA predictor app (Phase 5)
 streamlit run 08_round_tracker.py   # run the personal round tracker (Phase 8)
+python selfcheck.py           # testing-phase self-check: PASS/FAIL per check, exit 1 on any failure
 ```
+
+The round tracker is `08_round_tracker.py`. The testing-phase plan called it `tracker_app.py`
+(the plan's Phase 9 name differs from what was built). Use `08_round_tracker.py` everywhere and
+don't create `tracker_app.py`.
 
 ## Dataset
 
@@ -89,8 +92,22 @@ no three-putt data. Never fill in or "fix" its numbers from memory. They come fr
 `data/my_rounds.csv` (Phase 8+, gitignored) — the user's own logged rounds. This is personal data,
 so never commit it, and never create test rounds in it: run checks on a scratch copy.
 `data/my_rounds.example.csv` is the header-only template. Round fields are listed in
-`ROUND_COLUMNS` in `rounds.py`. `length_yards`, `adjusted_score` (blank = use gross score) and
-`pcc` (blank = unknown, stored blank and used as 0; only −1, 0, +1, +2, +3) are optional, and older CSVs without them must still load.
+`ROUND_COLUMNS` in `rounds.py`. `holes` (9 or 18; blank = 18), `length_yards`, `adjusted_score`
+(blank = use gross score) and `pcc` (blank = unknown, stored blank and used as 0; only −1, 0, +1,
++2, +3) are optional, and older CSVs without them must still load. 9-hole rounds are saved and
+listed but excluded from the estimated index and the strokes-lost report.
+
+Data safety (`storage.py`, see its header comment): atomic writes (temp file + `os.replace`), a
+backup to `data/backups/` (gitignored, newest 30 kept) before every write that changes the file,
+and a `schema_version` column (current: 2; blank = 1). Rows that fail validation are reported
+and skipped on load but never removed from the file. Writes start from the raw file, never from
+the filtered rounds. The env var `GOLF_ROUNDS_PATH` points the app at another file. `selfcheck.py`
+uses it to run everything on scratch copies.
+
+**Testing phase (from 2026-10-12): no schema changes without a migration note.** The user is
+logging real rounds. Any change to the round columns or their meaning must bump `SCHEMA_VERSION`,
+add a line to the version history in `storage.py` saying how older rows are read, keep older
+files loading, and add a `selfcheck.py` check for the old format.
 
 WHS constants and formulas come only from official sources the user provides. Never recall or
 substitute them from memory.
@@ -108,8 +125,11 @@ an amateur score prediction, and must never be used on inputs outside its traini
   build-up is visible in the file listing itself — don't reorganize into a package/src layout.
 - Shared helpers are unnumbered root files: `benchmarks.py` (load/validate the benchmark CSV,
   `expected_stat()` interpolation with clamping, tour range guard), `rounds.py` (round schema,
-  validation), `storage.py` (load/save/export/import), `handicap.py`, `strokes_lost.py`
-  (per-area breakdown, putting confound, ranking), `strokes_config.py` (named constants).
+  parsing, field-by-field validation), `storage.py` (atomic load/save/export/import, backups,
+  schema version), `handicap.py`, `strokes_lost.py` (per-area breakdown, averages, putting
+  confound, ranking), `strokes_config.py` (named constants), and `selfcheck.py` (run it after
+  every change; it must keep passing and must never touch `data/my_rounds.csv`).
+- `TESTING.md` is the user's checklist for testing with real rounds. Keep it in step with the app.
 - `handicap.py` behaviours: everything is kept unrounded and rounded half-up (`round_half_up`,
   not Python's `round`) only for display or where WHS says to. There are two expected scores:
   `plays_to_handicap` (headline) and `typical_round` (soft, ±2, with a fitted overshoot clamped
@@ -140,6 +160,11 @@ an amateur score prediction, and must never be used on inputs outside its traini
       (`streamlit run 08_round_tracker.py`)
 - [x] Phase 9: WHS-based maths (two expected scores, Rule 5.2a index, adjusted score/PCC),
       putting/GIR confound flag, storage.py + Export/Import (`09_course_aware_checks.py`)
+- [x] Testing-phase readiness (2026-10-12): atomic writes + backups + schema_version, stricter
+      field-by-field validation, duplicate confirm, 9-hole rounds, first-run guide and Known
+      limitations, `selfcheck.py`, `TESTING.md` (user checklist for real rounds)
+- [ ] Testing phase: the user logs real rounds for several weeks (see `TESTING.md`). Phase 10
+      is not started; see open decision #13.
 
 See `FINDINGS.md` for the detailed results and interpretation from each phase, including a
 noteworthy result: the Random Forest overfits (train R² 0.945 vs test R² 0.697) and is actually

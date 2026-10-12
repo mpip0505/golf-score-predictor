@@ -20,3 +20,8 @@ __pycache__/
 
 # Personal round log (Phase 8+) - private data, never commit
 data/my_rounds.csv
+
+# Automatic backups of the round log (testing phase) - also private data
+data/backups/
+# Temp files from an interrupted atomic save (safe to delete)
+data/.*.tmp

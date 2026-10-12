@@ -359,6 +359,14 @@ never created.
   - Not defined in the book: the up & down denominator, fairway rules for par 3s, and whether
     "handicap" means a WHS index. The data predates WHS.
 
+- **Course handicap and the user's association (#2):** the user plays mostly in Malaysia and
+  sometimes in neighbouring countries. The official 2024 Rules of Handicapping (Rule 6.1a, p. 68)
+  give `Handicap Index × (Slope ÷ 113) + (Course Rating − par)`, rounded to the nearest whole
+  number as the final step. There is no option for an association to drop the (rating − par)
+  term, and the Rules are "jointly governed by the USGA and The R&A on a unified" basis, so the
+  formula applies in Malaysia and neighbouring countries. The MGA's own site doesn't publish the
+  formula (golf.com.my still shows pre-WHS text), so this rests on the Rules themselves.
+
 **Phase 9 decisions (2026-10-08)**, settled by Claude after the user asked it to go ahead:
 - **#7 Putting confound rule: kept the 0.7 ratio.** At high handicaps the rule is sensitive. At
   25 hcp it flags an average below 1.26 greens against a benchmark of 1.8, a gap of only ~0.5
@@ -387,6 +395,79 @@ never created.
 **Other weak assumptions:**
 - Per-stat gaps ignore course difficulty, so on a hard course every area looks worse.
 - One round is noisy. The average over rounds is the real signal and needs ~5+ rounds.
+
+## Testing-phase readiness (2026-10-12) — `selfcheck.py`, `TESTING.md`
+
+Before the user logs real rounds for several weeks, the tracker was hardened so that nothing done
+in the app (bad input, or a crash mid-save) can lose or corrupt `data/my_rounds.csv`.
+
+**What changed:**
+- **Atomic writes:** the new file goes to a temp file in the same folder, then `os.replace()`
+  swaps it in. A crash leaves the old file (and at worst a stray `.tmp`), never a half-written one.
+- **Backups:** before every write that changes an existing file, a copy goes to
+  `data/backups/my_rounds_YYYYMMDD_HHMMSS.csv` (gitignored). The newest 30 are kept. The pruning
+  check found a bug in the first version: once pruning freed the oldest backup's name, the next
+  backup could reuse it, sort as the oldest and be deleted at once. Backups that share a second
+  now count up from the highest number used, and are sorted by number rather than alphabetically.
+- **Schema version:** a `schema_version` column rather than a sidecar file, because it travels
+  with Export/Import and backups, and it keeps a save to a single atomic write. Version 2 added
+  `holes`. A blank version means 1 (Phase 8/9 files). A file with a newer version is refused for
+  loading, saving and importing.
+- **No silent drops:** every row is parsed cell by cell and validated on load. Failing rows are
+  shown in the app (row number, problem, values) and left out of the reports, but they stay in
+  the file. Saves start from the raw file text, not the filtered rounds.
+- **Validation** now returns one plain-language message per field, which the app shows under that
+  box. Added checks: future dates; whole numbers and no negatives; putts ≤ score − holes (every
+  hole needs one non-putt shot, which is stricter than putts ≤ score); 3-putts ≤ ⌊putts / 3⌋ and ≤
+  holes; penalties ≤ score − holes; 9-hole limits; YYYY-MM-DD dates only, so 12/10/2026 can't be
+  read as 10 December. Same date + course + tees asks "different round or the same one?" before
+  saving. Import still skips exact duplicates and warns about near ones.
+- **9-hole rounds:** saved and listed, but excluded from the estimated index and the strokes-lost
+  report. The benchmarks are per 18 holes, and the WHS 9-hole rules haven't come from an official
+  source.
+- **App:** a first-run guide (how to log a round, what each stat means, runs locally), a Known
+  limitations expander (including unresolved #5 and #6), "based on N rounds", and a "too few
+  rounds to say much" notice below 3 rounds. The form keeps your entries when something is wrong.
+
+**Weakness engine, hand-checked** (5 rounds at index 15, rating 72.0, slope 113. Full working in
+`selfcheck.py`): averages GIR 2.0, putts 35.6, attempts 13.6, saves 2.4, penalties 2.8. Against
+the 15-hcp row (GIR 4.32/18, scramble 21%, putts 33.1, penalties 2.45): approach 2.32 × 0.79 =
+1.8328, short game 2.856 − 2.4 = 0.456, putting 2.5, penalties 0.35. Average GIR 2.0 < 0.7 × 4.32
+= 3.024, so putting is flagged and moved below penalties and short game. The order is approach,
+short game, penalties, putting. Differentials 20, 18, 23, 19, 17 give an index of 17.0 (lowest
+1 of 5). An added 9-hole round would change both answers if it were counted.
+
+**What `selfcheck.py` covers** (17 checks, all on scratch folders):
+1. `handicap.py` asserts.
+2. Benchmark CSV: columns, numeric values, a broken copy rejected, and trend flags *reported, not
+   fixed*: fairways 50/48/49/48/46/46 move the wrong way once, putts are flat at 15/20, and there
+   is no 3-putt data.
+3. Tour range guard: inside, on the edge, just outside, and a 15-hcp golfer refused.
+4. Validation: 16 bad-input cases each caught on the right field, one message per field, and
+   unreadable CSV cells reported.
+5. Storage: save/reload/export/import round trip, backup contents, re-import adds nothing, a bad
+   import changes nothing, bad rows are kept in the file, version 1 and newer-version files, a
+   crash halfway through writing and a crash before the swap (file unchanged, no temp files
+   left), and pruning to 30.
+6. Weakness engine: the hand-computed answer above.
+7. App, headless (`streamlit.testing.v1.AppTest` on `08_round_tracker.py`): no rounds, an
+   incomplete form and an impossible form refused, a complete form saved and cleared, the
+   duplicate warning (cancel and confirm), saved rounds (index 17.0, bad row shown, file
+   unchanged by viewing), under 3 rounds, and Export/Import.
+8. `data/my_rounds.csv` and `data/backups/` are unchanged.
+
+**What it can't cover:**
+- Real browser behaviour: layout, how errors look under each box, number-box quirks while
+  typing, and the download actually landing in your Downloads folder. AppTest checks only that
+  the export button exists; the exported text itself is checked through `export_csv()`.
+- A real power cut or force-quit. The crash tests raise an error inside Python, so the clean-up
+  code runs. In a real crash a `.tmp` file can be left in `data/`. It's harmless and gitignored.
+- Whether `fsync` really reaches the disk (that's up to the OS and the drive).
+- Editing the CSV in a spreadsheet app, which may rewrite dates or numbers. Such rows would be
+  flagged and skipped, not lost.
+- Whether the numbers are *right for you*: that's what the testing weeks are for.
+- Streamlit serves on your local network by default ("Network URL"). See TESTING.md for
+  `--server.address localhost`.
 
 ## Open questions for later phases
 

@@ -22,7 +22,7 @@ from decimal import ROUND_HALF_DOWN, ROUND_HALF_UP, Decimal
 
 import numpy as np
 
-from rounds import is_blank
+from rounds import full_rounds, is_blank
 
 # 113 is the WHS "standard" slope: the slope of a course of average
 # difficulty. slope / 113 says how much harder (>1) or easier (<1) than
@@ -98,15 +98,20 @@ def course_handicap(index, slope, rating, par):
     How many strokes this golfer "gets" on THIS course from THESE tees.
     Returns the UNROUNDED value; round it only for display.
 
-    Formula, from the USGA's WHS FAQ (Rules of Handicapping 6.1 / 6.2):
+    Formula, from the WHS Rules of Handicapping (2024 edition), Rule 6.1a,
+    also given in the USGA's WHS FAQ:
         course handicap = index x (slope / 113) + (course rating - par)
 
     The first part scales your index up on harder courses and down on
     easier ones. The second part adjusts for courses where even a scratch
     golfer is expected to score above or below par.
 
-    CHECK: national associations adopted the (course rating - par) term at
-    different times, so make sure YOUR association uses this version.
+    Checked 2026-10-08: the 2024 Rules are "jointly governed by the USGA and
+    The R&A" for every country, and Rule 6.1a has no option to drop the
+    (course rating - par) term - so it applies in Malaysia and neighbouring
+    countries too. (Some associations only adopted the term after 2020, so
+    a course handicap from an old scorecard may differ; rounds logged here
+    are recent, so this doesn't matter for the tracker.)
     expected_scores() below doesn't depend on that term at all - it uses
     rating + index x slope / 113 directly.
     """
@@ -241,12 +246,12 @@ def estimated_index(rounds):
     """
     ESTIMATED index from saved rounds (a DataFrame from storage.load_rounds).
 
-    Uses only 18-hole rounds - currently every saved round, since the
-    tracker only accepts 18-hole rounds. Takes the newest 20 by date and
-    applies the WHS table. See ESTIMATE_NOT_MODELLED for what's missing
-    compared with an official index.
+    Uses only 18-hole rounds (9-hole rounds are left out - see
+    rounds.full_rounds). Takes the newest 20 by date and applies the WHS
+    table. See ESTIMATE_NOT_MODELLED for what's missing compared with an
+    official index.
     """
-    newest = rounds.sort_values("date", kind="stable").tail(RECENT_ROUNDS)
+    newest = full_rounds(rounds).sort_values("date", kind="stable").tail(RECENT_ROUNDS)
     differentials = [round_differential(row) for _, row in newest.iterrows()]
     return index_from_differentials(differentials)
 
@@ -257,6 +262,7 @@ ESTIMATE_NOT_MODELLED = [
     "(the estimate runs HIGH after a blow-up hole)",
     "exceptional score reductions",
     "soft and hard caps (limits on how fast an index can rise)",
+    "9-hole rounds (they're saved, but not counted)",
 ]
 
 
