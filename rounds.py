@@ -18,6 +18,8 @@ from numbers import Number
 
 import pandas as pd
 
+import strokes_config as cfg
+
 # Holes in a full round. The benchmarks (strokes_lost.py) are per 18 holes.
 HOLES = 18
 ALLOWED_HOLES = (9, 18)
@@ -57,6 +59,13 @@ ROUND_COLUMNS = [
 # blank"; a number = "blank means this value".
 OPTIONAL_DEFAULTS = {
     "holes": HOLES,          # blank -> an 18-hole round (older files have no holes column)
+    # Rating and slope may be blank if the scorecard doesn't show them. The
+    # round is still saved and used in the strokes-lost report (which never
+    # uses them), but it is NOT used for the estimated index or the
+    # course-adjusted comparison - we never guess a rating. See
+    # handicap.index_exclusion_reason().
+    "course_rating": None,
+    "slope_rating": None,
     "length_yards": None,
     "adjusted_score": None,  # blank -> differential uses the gross score
     # pcc stays BLANK when you don't know it, so "unknown" and "it was 0"
@@ -109,14 +118,9 @@ LABELS = {
     "pcc": "PCC",
 }
 
-# Sanity limits that depend on how many holes were played. These are
-# generous "does this look like a typo?" bounds, NOT WHS rules (the only
-# official limit used below is slope 55-155). The 9-hole ones are roughly
-# half the 18-hole ones.
-LIMITS = {
-    18: {"rating": (60, 80), "par": (60, 75), "below_par": 15, "max_score": 200},
-    9: {"rating": (25, 40), "par": (27, 38), "below_par": 8, "max_score": 100},
-}
+# The typo-catching limits that depend on how many holes were played
+# (course rating, par and score ranges) are judgement calls, so they live in
+# strokes_config.py as SANITY_LIMITS, with every other judgement call.
 
 # Dates in the CSV must be written like 2026-10-12. Why so strict? In
 # Malaysia "12/10/2026" means 12 October, but a lot of software reads it as
@@ -241,15 +245,16 @@ def validate_round(r, today=None):
     if holes not in ALLOWED_HOLES:
         add("holes", "Holes played must be 9 or 18.")
         return problems  # every limit below depends on the number of holes
-    limits = LIMITS[holes]
+    limits = cfg.SANITY_LIMITS[holes]
 
     # --- 5. Course info ---
     # Slope 55-155 is the full range WHS allows. The rating and par limits
-    # are generous sanity bounds (see LIMITS above).
-    if not 55 <= r["slope_rating"] <= 155:
+    # are generous sanity bounds (SANITY_LIMITS in strokes_config.py).
+    # Rating and slope are optional, so they're only checked when filled in.
+    if not is_blank(r.get("slope_rating")) and not 55 <= r["slope_rating"] <= 155:
         add("slope_rating", "Slope rating must be between 55 and 155.")
     low, high = limits["rating"]
-    if not low <= r["course_rating"] <= high:
+    if not is_blank(r.get("course_rating")) and not low <= r["course_rating"] <= high:
         add("course_rating", f"Course rating must be between {low} and {high} "
                              f"for a {holes}-hole round.")
     low, high = limits["par"]

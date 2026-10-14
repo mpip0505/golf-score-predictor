@@ -1,0 +1,9 @@
+# Streamlit settings for every app run from this folder (both
+# `streamlit run 08_round_tracker.py` and `streamlit run app.py`).
+#
+# address = "localhost": the app only answers requests from THIS computer.
+# Without it, Streamlit also listens on your local network (the "Network URL"
+# it prints), so anyone on the same Wi-Fi could open the tracker and see or
+# add rounds. A --server.address flag on the command line still overrides this.
+[server]
+address = "localhost"

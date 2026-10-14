@@ -306,12 +306,11 @@ module) rounds halves up as golf expects. One assert checks a 12.55 → 12.6 ind
 
 **Putts/GIR confound.** Golfers who miss many greens chip close and take fewer putts, so putting
 can look better than it is. Putting is in the low-confidence tier. It's flagged **"confounded by
-GIR"** when the player's *average* GIR over at least 3 rounds is below `GIR_CONFOUND_RATIO`
-(0.7, a judgement call, not calibrated) × the benchmark GIR. When flagged, it's never ranked
-above penalties or short game. Trigger points per 18 holes: 7.69 greens at 0 hcp, 5.54 at 5,
-4.54 at 10, 3.02 at 15, 2.14 at 20, 1.26 at 25. Because it's a ratio, the margin shrinks from
-~3.3 greens at scratch to ~0.5 at 25 hcp. 3-putts are logged but not scored, because the
-benchmark file has no 3-putt column.
+GIR"** when the player's *average* GIR over at least 3 rounds is 2 or more greens below the
+benchmark (`GIR_CONFOUND_GREENS`). When flagged, it's never ranked above penalties or short game.
+*(Phase 9 used a 0.7 ratio instead; the user replaced it with the absolute rule on 2026-10-12.
+See "Final hardening" below.)* 3-putts are logged but not scored, because the benchmark file has
+no 3-putt column.
 
 **Strokes-lost conversions** (positive = lost):
 
@@ -374,6 +373,7 @@ never created.
   putting below penalties and short game and adds a label; no strokes change. High handicappers
   usually lose more to those two anyway. An absolute gap (e.g. 2 greens) would follow the
   mechanism more closely, so it's the fallback if the flag proves noisy in real rounds.
+  **Superseded 2026-10-12:** the user chose the absolute 2-green rule (see "Final hardening").
 - **#8 Blank PCC: now stored blank.** It's used as 0 in calculations, so "unknown" and "0" stay
   different in the CSV, and old CSVs load with blank PCC. Previously a blank was saved as 0.0.
 - **#9 Import: kept all-or-nothing, skipping exact duplicates.** A partial import is harder to
@@ -432,12 +432,14 @@ in the app (bad input, or a crash mid-save) can lose or corrupt `data/my_rounds.
 **Weakness engine, hand-checked** (5 rounds at index 15, rating 72.0, slope 113. Full working in
 `selfcheck.py`): averages GIR 2.0, putts 35.6, attempts 13.6, saves 2.4, penalties 2.8. Against
 the 15-hcp row (GIR 4.32/18, scramble 21%, putts 33.1, penalties 2.45): approach 2.32 × 0.79 =
-1.8328, short game 2.856 − 2.4 = 0.456, putting 2.5, penalties 0.35. Average GIR 2.0 < 0.7 × 4.32
-= 3.024, so putting is flagged and moved below penalties and short game. The order is approach,
+1.8328, short game 2.856 − 2.4 = 0.456, putting 2.5, penalties 0.35. Average GIR 2.0 is
+4.32 − 2.0 = 2.32 greens below the benchmark (≥ 2), so putting is flagged and moved below
+penalties and short game. The order is approach,
 short game, penalties, putting. Differentials 20, 18, 23, 19, 17 give an index of 17.0 (lowest
 1 of 5). An added 9-hole round would change both answers if it were counted.
 
-**What `selfcheck.py` covers** (17 checks, all on scratch folders):
+**What `selfcheck.py` covers** (17 checks at the time, all on scratch folders. The final hardening
+pass below brought it to 23):
 1. `handicap.py` asserts.
 2. Benchmark CSV: columns, numeric values, a broken copy rejected, and trend flags *reported, not
    fixed*: fairways 50/48/49/48/46/46 move the wrong way once, putts are flat at 15/20, and there
@@ -466,8 +468,63 @@ short game, penalties, putting. Differentials 20, 18, 23, 19, 17 give an index o
 - Editing the CSV in a spreadsheet app, which may rewrite dates or numbers. Such rows would be
   flagged and skipped, not lost.
 - Whether the numbers are *right for you*: that's what the testing weeks are for.
-- Streamlit serves on your local network by default ("Network URL"). See TESTING.md for
-  `--server.address localhost`.
+- Streamlit serves on your local network by default ("Network URL"). Since the final hardening
+  pass, `.streamlit/config.toml` sets `address = "localhost"`.
+
+## Final hardening before the testing weeks (2026-10-12)
+
+**Putting-confound rule: now absolute (the user's decision).** The code had still been using the
+Phase 9 ratio (`GIR_CONFOUND_RATIO = 0.7`). It now flags putting when the average GIR over at
+least 3 eighteen-hole rounds is **2 or more greens per 18 below** the benchmark at the player's
+index (`GIR_CONFOUND_GREENS = 2`). The ratio constant is gone. The mechanism is about extra missed
+greens (each one is a hole where you chip close and need fewer putts), so a count of greens
+matches it better than a percentage of a small number.
+
+| Index | Benchmark greens/18 | Flag at an average of | Old 0.7 ratio flagged below |
+|---|---|---|---|
+| 0 | 10.98 | 8.98 or fewer | 7.69 |
+| 5 | 7.92 | 5.92 or fewer | 5.54 |
+| 10 | 6.48 | 4.48 or fewer | 4.54 |
+| 15 | 4.32 | 2.32 or fewer | 3.02 |
+| 20 | 3.06 | 1.06 or fewer | 2.14 |
+| 25 | 1.80 | never (−0.20) | 1.26 |
+
+**Limits at 20 and 25 handicap (intended):** at 25 the rule can never fire, and at 20 only when
+the average is about 1 green a round. There are only ~2–3 benchmark greens to miss at those
+handicaps, so the distortion that extra missed greens can cause in the putting number is capped
+at about that size. Hand-checked cases in `selfcheck.py`, using the interpolated benchmarks
+(3.06 and 7.92, not the rounded 3.1 and 7.9; the outcomes are the same either way):
+- index 20, average 1.5: gap 1.56 → not flagged (the ratio would have flagged it: 1.5 < 2.142);
+- index 5, average 5.7: gap 2.22 → flagged (the ratio would not: 5.7 ≥ 5.544);
+- index 20, average exactly 1.06: gap exactly 2 → flagged ("2 or more").
+
+**Index eligibility.** Course rating and slope are now optional when *saving* a round, because a
+scorecard may not show them. Such a round is saved, listed, and used in the strokes-lost report
+(which never uses them). It is **not** used for the estimated index or the course-adjusted
+comparison, and no value is ever guessed. The app shows "Uses N round(s) (the newest 20 of M
+eligible). Not used: … – 9 holes, not used for index; … – no rating/slope, not used for index",
+and an `index` column in All rounds. Check: a no-rating round with score 80 would become the
+lowest differential (8.0) if a rating were guessed; the index stays 17.0.
+
+**Judgement calls in one file.** `strokes_config.py` now holds every judgement-call setting: the
+conversions, `GIR_CONFOUND_GREENS`, `OVERSHOOT_FIT_DEGREE`, `TYPICAL_ROUND_BAND`,
+`FEW_ROUNDS_NOTICE`, `FIRST_IMPRESSION_ROUNDS` and `SANITY_LIMITS` (moved from `rounds.py`).
+`THREE_PUTT_STROKES = None` records that 3-putts aren't scored. `JUDGEMENT_CALLS` lists them all
+with what each assumes. The app's Known limitations box shows that list, and `selfcheck.py`
+fails if a setting is missing from it or its value differs. No values were changed.
+
+**Practice mode and localhost.** `ROUND_DATA_DIR` (read only in `storage.py`, default `data/`)
+points the app at another folder for its rounds and backups. It replaced the earlier
+`GOLF_ROUNDS_PATH`, so there is a single switch. The app shows a "Practice mode" banner when it's
+set. `.streamlit/config.toml` sets `[server] address = "localhost"` for every Streamlit app run
+from the project folder (including `app.py`). Checked: the server printed only a localhost URL,
+and the machine's LAN address got no answer.
+
+**Self-check additions** (23 checks now): 3-putt bound (10 → 3, not 4; 12 → 4; 0 → 0), the
+constants list, the confound rule cases and per-handicap triggers, index eligibility, practice
+mode writing nothing under `data/`, `git check-ignore` for the private and temp paths (and that
+the example CSV and config are *not* ignored), and a byte-for-byte snapshot of everything under
+`data/`.
 
 ## Open questions for later phases
 

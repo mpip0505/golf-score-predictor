@@ -155,7 +155,10 @@ def putting_confound(rounds, benchmarks):
     `rounds` (a DataFrame of saved rounds), never one round.
 
     Compares your average GIR with the average benchmark GIR at the index
-    you had for each round (your index can change between rounds).
+    you had for each round (your index can change between rounds). Flags
+    putting when you average GIR_CONFOUND_GREENS (2) or more greens per 18
+    BELOW that benchmark - an absolute gap, not a percentage. See
+    strokes_config.py for why, and why it can't fire at 25 hcp.
 
     Returns (flag, message). flag is True / False, or None when there are
     too few rounds to judge.
@@ -171,11 +174,15 @@ def putting_confound(rounds, benchmarks):
         expected_stat(benchmarks, "gir_pct", idx) / 100 * HOLES
         for idx in rounds["handicap_index"]
     ) / n
-    trigger = cfg.GIR_CONFOUND_RATIO * typical_gir
+    gap = typical_gir - your_gir  # how many FEWER greens than typical you hit
 
-    flag = bool(your_gir < trigger)  # bool(): plain True/False, not numpy's np.True_
-    message = (f"Your average GIR {your_gir:.1f}/18 vs typical {typical_gir:.1f}/18 "
-               f"(flag below {trigger:.1f}, i.e. {cfg.GIR_CONFOUND_RATIO:.0%} of typical).")
+    # round(gap, 9): decimals like 7.92 - 5.92 can come out as 1.9999999999
+    # in floating point; rounding first makes "exactly 2" count as 2.
+    flag = bool(round(gap, 9) >= cfg.GIR_CONFOUND_GREENS)  # bool(): plain True/False
+    message = (f"Your average GIR {your_gir:.1f}/18 vs typical {typical_gir:.1f}/18, "
+               f"{gap:.1f} greens {'below' if gap >= 0 else 'above'} typical "
+               f"(putting is flagged at {cfg.GIR_CONFOUND_GREENS} or more below, "
+               f"i.e. an average of {typical_gir - cfg.GIR_CONFOUND_GREENS:.1f} or fewer).")
     return flag, message
 
 

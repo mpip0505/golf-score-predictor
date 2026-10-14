@@ -49,7 +49,11 @@ python 01_explore_data.py     # run a phase script
 streamlit run app.py          # run the PGA predictor app (Phase 5)
 streamlit run 08_round_tracker.py   # run the personal round tracker (Phase 8)
 python selfcheck.py           # testing-phase self-check: PASS/FAIL per check, exit 1 on any failure
+ROUND_DATA_DIR=/tmp/golf_scratch streamlit run 08_round_tracker.py   # practice mode (scratch data)
 ```
+
+`.streamlit/config.toml` sets `[server] address = "localhost"`, so every Streamlit app run from
+this folder (the tracker and `app.py`) is reachable only from this computer, not the Wi-Fi.
 
 The round tracker is `08_round_tracker.py`. The testing-phase plan called it `tracker_app.py`
 (the plan's Phase 9 name differs from what was built). Use `08_round_tracker.py` everywhere and
@@ -101,8 +105,12 @@ Data safety (`storage.py`, see its header comment): atomic writes (temp file + `
 backup to `data/backups/` (gitignored, newest 30 kept) before every write that changes the file,
 and a `schema_version` column (current: 2; blank = 1). Rows that fail validation are reported
 and skipped on load but never removed from the file. Writes start from the raw file, never from
-the filtered rounds. The env var `GOLF_ROUNDS_PATH` points the app at another file. `selfcheck.py`
-uses it to run everything on scratch copies.
+the filtered rounds. **Practice mode:** the env var `ROUND_DATA_DIR` (default `data/`, read only
+in `storage.py`) points the app at another folder for its rounds and backups, and the app shows a
+"Practice mode" banner. `selfcheck.py` uses it to run everything on scratch folders. Course
+rating and slope are optional when saving. A round without them is saved and used in the
+strokes-lost report, but excluded from the index (and the course-adjusted comparison) with a
+visible reason. A rating is never guessed.
 
 **Testing phase (from 2026-10-12): no schema changes without a migration note.** The user is
 logging real rounds. Any change to the round columns or their meaning must bump `SCHEMA_VERSION`,
@@ -127,7 +135,7 @@ an amateur score prediction, and must never be used on inputs outside its traini
   `expected_stat()` interpolation with clamping, tour range guard), `rounds.py` (round schema,
   parsing, field-by-field validation), `storage.py` (atomic load/save/export/import, backups,
   schema version), `handicap.py`, `strokes_lost.py` (per-area breakdown, averages, putting
-  confound, ranking), `strokes_config.py` (named constants), and `selfcheck.py` (run it after
+  confound, ranking), `strokes_config.py` (every judgement-call constant), and `selfcheck.py` (run it after
   every change; it must keep passing and must never touch `data/my_rounds.csv`).
 - `TESTING.md` is the user's checklist for testing with real rounds. Keep it in step with the app.
 - `handicap.py` behaviours: everything is kept unrounded and rounded half-up (`round_half_up`,
@@ -140,8 +148,15 @@ an amateur score prediction, and must never be used on inputs outside its traini
 - Expected scores are never fed into the weakness engine, which compares stats with the
   benchmark at the player's index. Confounded putting is never ranked above penalties or short
   game.
-- Strokes-lost constants live only in `strokes_config.py`. Ask the user before changing any of
-  them. GIR/fairway/putt benchmarks are never scaled by slope or length.
+- Every judgement-call constant (strokes-lost conversions, `GIR_CONFOUND_GREENS`, the overshoot
+  fit degree, the typical-round band, the few-rounds thresholds, the 9/18-hole `SANITY_LIMITS`)
+  lives only in `strokes_config.py`, listed in `JUDGEMENT_CALLS`. The app's Known limitations
+  shows that list, and `selfcheck.py` checks it matches. Ask the user before changing any of
+  them, and add any new one to `JUDGEMENT_CALLS`.
+- Putting-confound rule (user's decision, 2026-10-12): flag when the average GIR over 3+
+  eighteen-hole rounds is 2 or more greens per 18 below the benchmark (`GIR_CONFOUND_GREENS`).
+  It can't fire at 25 hcp and rarely at 20; that's intended. The old 0.7 ratio is gone.
+- GIR/fairway/putt benchmarks are never scaled by slope or length.
 - Don't touch `web/` as part of the amateur feature.
 - Comment code heavily; explain the "why" of each pandas/sklearn call, not just what it does.
 
@@ -163,6 +178,9 @@ an amateur score prediction, and must never be used on inputs outside its traini
 - [x] Testing-phase readiness (2026-10-12): atomic writes + backups + schema_version, stricter
       field-by-field validation, duplicate confirm, 9-hole rounds, first-run guide and Known
       limitations, `selfcheck.py`, `TESTING.md` (user checklist for real rounds)
+- [x] Final hardening (2026-10-12): absolute 2-green confound rule, rating/slope required for the
+      index (not for saving), judgement calls centralised + shown in the app, practice mode
+      (`ROUND_DATA_DIR`), localhost-only config, ignore-rule checks (`selfcheck.py`: 23 checks)
 - [ ] Testing phase: the user logs real rounds for several weeks (see `TESTING.md`). Phase 10
       is not started; see open decision #13.
 

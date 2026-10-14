@@ -23,5 +23,12 @@ data/my_rounds.csv
 
 # Automatic backups of the round log (testing phase) - also private data
 data/backups/
-# Temp files from an interrupted atomic save (safe to delete)
+# Temp files from an interrupted atomic save (safe to delete). The save
+# names them .my_rounds_XXXX.tmp; both patterns are listed to be explicit.
+data/*.tmp
 data/.*.tmp
+
+# Practice-mode folders (ROUND_DATA_DIR=...) if you make one INSIDE the repo.
+# Name it scratch/ or golf_scratch<anything>/ and git will ignore it.
+scratch/
+golf_scratch*/

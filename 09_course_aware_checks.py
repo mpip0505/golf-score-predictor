@@ -9,7 +9,7 @@
 #   2. Two expected scores (headline + soft "typical round") for an example
 #      course, to show how far apart they are.
 #   3. The GIR threshold that flags putting as "confounded by GIR", at
-#      every benchmark handicap.
+#      every benchmark handicap (absolute 2-green rule since 2026-10-12).
 #   4. The WHS Rule 5.2a table and the hand-checked examples.
 #
 # Run with:  python 09_course_aware_checks.py
@@ -78,21 +78,23 @@ print("   term, and the benchmark courses' ratings are unknown.\n")
 # =====================================================================
 # 3. When does putting get flagged "confounded by GIR"?
 # =====================================================================
-# Flag when your AVERAGE GIR (over 3+ rounds) is below
-# GIR_CONFOUND_RATIO x the benchmark GIR at your index.
-print(f"3. Putting confound threshold (ratio {cfg.GIR_CONFOUND_RATIO}, "
-      f"needs {cfg.MIN_ROUNDS_FOR_CONFOUND_CHECK}+ rounds)")
+# Flag when your AVERAGE GIR (over 3+ rounds) is GIR_CONFOUND_GREENS (2) or
+# more greens per 18 below the benchmark GIR at your index. (Until
+# 2026-10-12 this was a 0.7 ratio; see strokes_config.py for the change.)
+print(f"3. Putting confound threshold ({cfg.GIR_CONFOUND_GREENS}+ greens below "
+      f"typical, needs {cfg.MIN_ROUNDS_FOR_CONFOUND_CHECK}+ rounds)")
 rows = []
 for h in bench["hcp_mid"]:
     typical = expected_stat(bench, "gir_pct", h) / 100 * HOLES
     rows.append({
         "handicap": h,
         "benchmark greens/18": typical,
-        "flag if your avg below": cfg.GIR_CONFOUND_RATIO * typical,
+        "flag if your avg at or below": typical - cfg.GIR_CONFOUND_GREENS,
     })
 print(pd.DataFrame(rows).round(2).to_string(index=False))
-print("   Because it's a ratio, the gap that triggers it shrinks at higher")
-print("   handicaps: ~3.3 greens at scratch, but only ~0.5 greens at 25 hcp.\n")
+print("   At 25 hcp the trigger is below 0 greens, so it can never fire; at 20")
+print("   you'd need ~1 green a round. Intended: there are only ~2-3 benchmark")
+print("   greens to miss there, so the putting distortion is small.\n")
 
 # =====================================================================
 # 4. WHS Rule 5.2a table + hand-checked examples

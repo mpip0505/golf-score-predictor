@@ -48,7 +48,8 @@ from rounds import (
     validate_round,
 )
 
-DEFAULT_ROUNDS_PATH = "data/my_rounds.csv"
+DEFAULT_DATA_DIR = "data"
+ROUNDS_FILE = "my_rounds.csv"
 
 # ---------------------------------------------------------------------
 # Schema version
@@ -80,17 +81,37 @@ class SchemaTooNewError(Exception):
     """The file was written by a newer version of the tracker than this one."""
 
 
-def rounds_path():
+def data_dir():
     """
-    Where your rounds live: data/my_rounds.csv, unless the environment
-    variable GOLF_ROUNDS_PATH says otherwise.
+    The folder your rounds (and their backups/) live in: data/, unless the
+    environment variable ROUND_DATA_DIR names another folder.
 
-    The override exists so the self-check (and you, when testing an import
-    on a scratch copy) can point the app at a different file without any
-    chance of touching the real one. It's read on every call, not once at
-    import time, so changing it always takes effect.
+    ROUND_DATA_DIR is "practice mode": point it at a scratch folder and the
+    app reads and writes ONLY there, so you can try things out (or the
+    self-check can run) without any chance of touching your real rounds:
+
+        ROUND_DATA_DIR=/tmp/golf_scratch streamlit run 08_round_tracker.py
+
+    It's read on every call, not once at import time, so changing it always
+    takes effect. This is the only place it's read.
     """
-    return os.environ.get("GOLF_ROUNDS_PATH", DEFAULT_ROUNDS_PATH)
+    return os.environ.get("ROUND_DATA_DIR") or DEFAULT_DATA_DIR
+
+
+def rounds_path():
+    """Your rounds file: <data folder>/my_rounds.csv."""
+    return os.path.join(data_dir(), ROUNDS_FILE)
+
+
+def practice_folder():
+    """
+    The practice folder if ROUND_DATA_DIR points somewhere other than the
+    real data/ folder, else None. The app shows a banner when it's set.
+    """
+    folder = data_dir()
+    if os.path.abspath(folder) == os.path.abspath(DEFAULT_DATA_DIR):
+        return None
+    return os.path.abspath(folder)
 
 
 # =====================================================================

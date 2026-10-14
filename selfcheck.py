@@ -16,16 +16,16 @@ import os
 import sys
 import tempfile
 
-# --- Safety first: point the app at a scratch file BEFORE importing anything
-# that might read GOLF_ROUNDS_PATH. storage.rounds_path() reads it on every
-# call, so the Streamlit app run below (AppTest) can only ever see scratch.
+# --- Safety first: switch on practice mode (ROUND_DATA_DIR) with a scratch
+# folder BEFORE importing anything that might read it. storage.data_dir()
+# reads it on every call, so the Streamlit app run below (AppTest) can only
+# ever see scratch folders.
 PROJECT = os.path.dirname(os.path.abspath(__file__))
 SCRATCH = tempfile.mkdtemp(prefix="golf_selfcheck_")
-os.environ["GOLF_ROUNDS_PATH"] = os.path.join(SCRATCH, "unused", "my_rounds.csv")
+os.environ["ROUND_DATA_DIR"] = os.path.join(SCRATCH, "unused")
 os.chdir(PROJECT)  # so "data/..." paths work wherever you run this from
 
-REAL_ROUNDS = os.path.join(PROJECT, "data", "my_rounds.csv")
-REAL_BACKUPS = os.path.join(PROJECT, "data", "backups")
+REAL_DATA = os.path.join(PROJECT, "data")
 
 
 def snapshot(path):
@@ -36,12 +36,26 @@ def snapshot(path):
         return f.read()
 
 
+def snapshot_tree(folder):
+    """
+    Every file under `folder` (hidden ones too) -> its exact bytes. Comparing
+    two of these shows whether ANYTHING in the folder was added, removed or
+    changed, including data/my_rounds.csv and data/backups/.
+    """
+    files = {}
+    # os.walk visits the folder and every folder inside it.
+    for here, _, names in os.walk(folder):
+        for name in names:
+            path = os.path.join(here, name)
+            files[os.path.relpath(path, folder)] = snapshot(path)
+    return files
+
+
 def list_dir(path):
     return sorted(os.listdir(path)) if os.path.isdir(path) else None
 
 
-REAL_BEFORE = snapshot(REAL_ROUNDS)
-REAL_BACKUPS_BEFORE = list_dir(REAL_BACKUPS)
+REAL_DATA_BEFORE = snapshot_tree(REAL_DATA)
 
 import io  # noqa: E402  (imports after the safety setup on purpose)
 import shutil  # noqa: E402
@@ -61,7 +75,8 @@ from benchmarks import (  # noqa: E402
     load_benchmarks,
     tour_feature_ranges,
 )
-from handicap import estimated_index  # noqa: E402
+import strokes_config as cfg  # noqa: E402
+from handicap import NO_RATING_OR_SLOPE, NOT_18_HOLES, estimated_index, index_usage  # noqa: E402
 from rounds import parse_round, validate_round  # noqa: E402
 from strokes_lost import (  # noqa: E402
     average_strokes_lost,
@@ -142,8 +157,9 @@ def round_with(**changes):
 #   Putting     35.6 - 33.1                            = 2.5
 #   Penalties   2.8 - 2.45                             = 0.35
 #
-# Confound check: flag if average GIR < 0.7 x 4.32 = 3.024. 2.0 < 3.024,
-# so putting is flagged. By the raw numbers putting (2.5) would rank first,
+# Confound check (absolute rule): flag if the average GIR is 2 or more
+# greens below the benchmark: 4.32 - 2.0 = 2.32 >= 2, so putting is
+# flagged. By the raw numbers putting (2.5) would rank first,
 # but a flagged putting must sit below penalties AND short game, so:
 #   expected order: Approach, Short game, Penalties, Putting (flagged)
 #   biggest leak:   Approach, 1.8328 strokes
@@ -304,6 +320,41 @@ def check_validation():
     assert {f for f, _ in problems} == {"date", "score"}, problems
 
 
+@check("validation: 3-putt limit is putts // 3 (rounded down)")
+def check_three_putt_bound():
+    # Each 3-putt uses at least 3 putts, so the most possible is putts / 3
+    # rounded DOWN. Rounding up would allow 4 from 10 putts = 12+ putts.
+    #   10 putts: 10 // 3 = 3 -> 3 allowed, 4 rejected
+    #   12 putts: 12 // 3 = 4 -> 4 allowed
+    #    0 putts:  0 // 3 = 0 -> 0 allowed, 1 rejected
+    cases = [(10, 3, True), (10, 4, False), (12, 4, True), (0, 0, True), (0, 1, False)]
+    for putts, three_putts, ok in cases:
+        problems = dict(validate_round(round_with(putts=putts, three_putts=three_putts)))
+        assert ("three_putts" not in problems) == ok, (putts, three_putts, problems)
+        INFO.append(f"{putts:>2} putts, {three_putts} three-putts -> "
+                    f"{'allowed' if ok else 'rejected: ' + problems['three_putts']}")
+
+
+@check("judgement-call constants: one config file, listed in full")
+def check_constants():
+    # Every UPPER_CASE setting in strokes_config.py must appear in
+    # JUDGEMENT_CALLS (which the app shows), with the same value - so the
+    # "Known limitations" list can't drift from the code.
+    settings = {name: value for name, value in vars(cfg).items()
+                if name.isupper() and name != "JUDGEMENT_CALLS"}
+    listed = {row["name"]: row["value"] for row in cfg.JUDGEMENT_CALLS}
+    missing = [name for name in settings if name not in listed]
+    assert not missing, f"not in JUDGEMENT_CALLS: {missing}"
+    for name, value in settings.items():
+        assert listed[name] == value, f"{name}: listed {listed[name]}, code {value}"
+    # The old ratio rule is gone, and nothing keeps its own copy of the limits.
+    assert not hasattr(cfg, "GIR_CONFOUND_RATIO"), "old ratio constant still there"
+    import rounds
+    assert not hasattr(rounds, "LIMITS"), "rounds.py still has its own LIMITS"
+    for row in cfg.JUDGEMENT_CALLS:
+        INFO.append(f"{row['name']:30s} = {row['value']}")
+
+
 # =====================================================================
 # 5. Storage
 # =====================================================================
@@ -462,7 +513,7 @@ def check_weakness_engine():
     bench = load_benchmarks()
 
     flagged, _ = putting_confound(rounds, bench)
-    assert flagged is True, "putting should be flagged (avg GIR 2.0 < 3.024)"
+    assert flagged is True, "putting should be flagged (gap 4.32 - 2.0 = 2.32 >= 2)"
 
     ranked = rank_areas(average_strokes_lost(rounds, bench), flagged)
     expected = [("Approach (greens)", 1.8328), ("Short game (up & down)", 0.456),
@@ -480,6 +531,84 @@ def check_weakness_engine():
         INFO.append(f"{area:24s} {value:.4f}")
 
 
+def gir_rounds(index, girs):
+    """A minimal table for putting_confound(): one 18-hole round per GIR value."""
+    return pd.DataFrame({"gir": girs, "handicap_index": index, "holes": 18})
+
+
+@check("confound rule: absolute 2-green gap, hand-checked")
+def check_confound_rule():
+    bench = load_benchmarks()
+    # Trigger at each benchmark handicap: benchmark greens - 2. Benchmark
+    # greens = gir_pct / 100 x 18 (straight from the CSV at these anchors).
+    for h in bench["hcp_mid"]:
+        typical = expected_stat(bench, "gir_pct", h) / 100 * 18
+        trigger = typical - cfg.GIR_CONFOUND_GREENS
+        note = "  (can never fire: below 0 greens)" if trigger < 0 else ""
+        INFO.append(f"index {h:>2g}: benchmark {typical:5.2f} greens, "
+                    f"flag at an average of {trigger:5.2f} or fewer{note}")
+
+    # (a) Index 20, average 1.5 greens. Interpolated benchmark at 20 =
+    #     17% x 18 = 3.06 greens (you rounded it to 3.1 - same outcome).
+    #     Gap 3.06 - 1.5 = 1.56 < 2  -> NOT flagged (absolute rule).
+    #     The old 0.7 ratio: 0.7 x 3.06 = 2.142; 1.5 < 2.142 -> it WOULD flag.
+    #     Rounds: GIR 1, 2, 1, 2 -> 6 / 4 = 1.5.
+    flag, message = putting_confound(gir_rounds(20, [1, 2, 1, 2]), bench)
+    assert flag is False, f"(a) should NOT be flagged: {message}"
+    INFO.append(f"(a) index 20, avg 1.5: not flagged. {message}")
+
+    # (b) Index 5, average 5.7 greens. Interpolated benchmark at 5 =
+    #     44% x 18 = 7.92 greens (you rounded to 7.9 - same outcome).
+    #     Gap 7.92 - 5.7 = 2.22 >= 2  -> flagged (absolute rule).
+    #     The old 0.7 ratio: 0.7 x 7.92 = 5.544; 5.7 is not < 5.544 -> it
+    #     would NOT flag.
+    #     Rounds: seven 6s and three 5s -> (42 + 15) / 10 = 57 / 10 = 5.7.
+    flag, message = putting_confound(gir_rounds(5, [6] * 7 + [5] * 3), bench)
+    assert flag is True, f"(b) should be flagged: {message}"
+    INFO.append(f"(b) index 5, avg 5.7: flagged. {message}")
+
+    # Boundary: EXACTLY 2 greens below must flag ("2 or more"). Index 20:
+    # benchmark 3.06, so an average of 3.06 - 2 = 1.06. With whole greens:
+    # 47 rounds of 1 + 3 rounds of 2 = 53 / 50 = 1.06. (Here the gap
+    # happens to come out as exactly 2.0 in floating point; for other
+    # numbers it can be 1.9999999999, which the round(gap, 9) in
+    # strokes_lost.py guards against.)
+    flag, message = putting_confound(gir_rounds(20, [1] * 47 + [2] * 3), bench)
+    assert flag is True, f"gap of exactly 2 should flag: {message}"
+
+    # Fewer than 3 rounds: no verdict at all.
+    flag, _ = putting_confound(gir_rounds(15, [0, 0]), bench)
+    assert flag is None, "the check ran on only 2 rounds"
+
+
+# A round with no rating or slope. If the code GUESSED a rating (say par
+# 72 and slope 113), its differential would be 80 - 72 = 8.0, the lowest of
+# all, and the index would drop from 17.0. So "still 17.0" proves it's left out.
+NO_RATING = round_with(date=date(2026, 9, 7), score=80, course_rating=None,
+                       slope_rating=None)
+
+
+@check("index eligibility: 9-hole and no-rating rounds saved but not counted")
+def check_index_eligibility():
+    path = scratch_path("eligibility")
+    save_all(path, FIVE_ROUNDS + [NINE_HOLE, NO_RATING])
+    rounds, skipped = storage.load_rounds(path)
+    assert len(rounds) == 7 and skipped == [], "a round wasn't saved"
+
+    value, _ = estimated_index(rounds)
+    assert value == 17.0, f"index {value}; a 9-hole or no-rating round was counted"
+    usage = index_usage(rounds)
+    assert "Uses 5 round(s)" in usage, usage
+    assert f"1 round(s) - {NOT_18_HOLES}" in usage, usage
+    assert f"1 round(s) - {NO_RATING_OR_SLOPE}" in usage, usage
+    INFO.append(usage)
+
+    # With only a rating missing (slope present) it's still left out.
+    one_missing = round_with(date=date(2026, 9, 8), score=80, course_rating=None)
+    assert storage.save_round(one_missing, path) == []
+    assert estimated_index(storage.load_rounds(path)[0])[0] == 17.0
+
+
 # =====================================================================
 # 7. The app itself, run headless with Streamlit's AppTest
 # =====================================================================
@@ -489,7 +618,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 def run_app(path):
     """Start the tracker app pointed at a scratch rounds file."""
     assert os.path.abspath(path).startswith(SCRATCH), "refusing a non-scratch path"
-    os.environ["GOLF_ROUNDS_PATH"] = path
+    os.environ["ROUND_DATA_DIR"] = os.path.dirname(path)
     at = AppTest.from_file(APP_FILE, default_timeout=60)
     at.run()
     assert not at.exception, f"app crashed: {at.exception[0].value}"
@@ -578,16 +707,25 @@ def check_app_save_and_duplicate():
 @check("app: saved rounds (report, index, bad row shown)")
 def check_app_saved_rounds():
     path = scratch_path("app_saved")
-    save_all(path, FIVE_ROUNDS + [NINE_HOLE])
+    save_all(path, FIVE_ROUNDS + [NINE_HOLE, NO_RATING])
     with open(path, "a") as f:
-        f.write("2026-09-07,Test Course,White,72,113,72,18,,15,abc,6,14,2,36,3,14,2,3,,,2\n")
+        f.write("2026-09-09,Test Course,White,72,113,72,18,,15,abc,6,14,2,36,3,14,2,3,,,2\n")
     before = snapshot(path)
 
     at = run_app(path)
     text = page_text(at)
     assert metric(at, "Handicap index") == "17.0", metric(at, "Handicap index")
     assert "ESTIMATED, not official" in text
-    assert "Based on 5 18-hole round(s); 1 9-hole round(s) not included." in text
+    assert "Practice mode: data is saved in" in text
+    # The no-rating round still counts in the strokes-lost report (6 rounds)...
+    assert "Based on 6 18-hole round(s); 1 9-hole round(s) not included." in text
+    # ...but not in the index, and the page says why.
+    assert "Uses 5 round(s)" in text and NO_RATING_OR_SLOPE in text and NOT_18_HOLES in text
+    history = [d.value for d in at.dataframe if "index" in d.value.columns][0]
+    assert sorted(history["index"]) == sorted(["eligible"] * 5 + [NOT_18_HOLES,
+                                                                 NO_RATING_OR_SLOPE])
+    # The newest round (no rating) is selected: no course-adjusted numbers.
+    assert "No course rating/slope for this round" in text
     assert "1 row(s) in your rounds file have problems" in text
     assert "Biggest leak this round: **Approach (greens)**" in text
     assert snapshot(path) == before, "viewing the app changed the file"
@@ -621,14 +759,61 @@ def check_app_export_import():
 
 
 # =====================================================================
-# 8. The real rounds file was never touched
+# 8. Practice mode, ignore rules, and the real data folder
 # =====================================================================
-@check("data/my_rounds.csv untouched")
+@check("practice mode: with ROUND_DATA_DIR set, nothing is written under data/")
+def check_practice_mode():
+    before = snapshot_tree(REAL_DATA)
+    practice = os.path.join(SCRATCH, "practice")
+    os.environ["ROUND_DATA_DIR"] = practice
+    assert storage.practice_folder() == os.path.abspath(practice)
+
+    # Use the DEFAULT paths (no path= argument), exactly like the app does:
+    # save twice (so a backup is made), export, import, load.
+    save_all(None, FIVE_ROUNDS[:2])
+    exported = storage.export_csv()
+    storage.import_rounds(io.StringIO(exported))
+    storage.load_rounds()
+    # And through the app: save a round with the form.
+    at = run_app(os.path.join(practice, "my_rounds.csv"))
+    fill_and_save(at, FIVE_ROUNDS[2])
+    assert "Round saved." in [e.value for e in at.success]
+
+    assert data_rows(os.path.join(practice, "my_rounds.csv")) == 3
+    assert len(list_dir(os.path.join(practice, "backups"))) == 2
+    assert snapshot_tree(REAL_DATA) == before, "something under data/ changed!"
+    INFO.append(f"3 rounds + 2 backups went to the practice folder; data/ unchanged")
+
+
+@check(".gitignore covers private and temporary files")
+def check_gitignore():
+    # git check-ignore -v prints the rule that ignores a path (exit 0), or
+    # nothing (exit 1) if the path would be committed. The paths don't need
+    # to exist.
+    must_ignore = ["venv/", "__pycache__/x.pyc", "data/my_rounds.csv",
+                   "data/backups/my_rounds_20260101_000000.csv",
+                   "data/.my_rounds_abc123.tmp", "data/leftover.tmp",
+                   "scratch/my_rounds.csv", "golf_scratch_week1/my_rounds.csv"]
+    must_keep = ["data/my_rounds.example.csv", ".streamlit/config.toml"]
+    for path in must_ignore + must_keep:
+        result = subprocess.run(["git", "check-ignore", "-v", path],
+                                capture_output=True, text=True)
+        ignored = result.returncode == 0
+        assert ignored == (path in must_ignore), \
+            f"{path} is {'ignored' if ignored else 'NOT ignored'}"
+        INFO.append(f"{path:45s} {result.stdout.split(chr(9))[0] if ignored else 'kept (not ignored)'}")
+
+
+@check("data/ folder untouched (my_rounds.csv, backups/, everything)")
 def check_real_file():
-    assert snapshot(REAL_ROUNDS) == REAL_BEFORE, "data/my_rounds.csv changed!"
-    assert list_dir(REAL_BACKUPS) == REAL_BACKUPS_BEFORE, "data/backups changed!"
-    INFO.append("data/my_rounds.csv " + ("does not exist (as before)" if REAL_BEFORE is None
+    after = snapshot_tree(REAL_DATA)
+    changed = sorted(set(after) ^ set(REAL_DATA_BEFORE)
+                     | {f for f in after if after.get(f) != REAL_DATA_BEFORE.get(f)})
+    assert not changed, f"changed under data/: {changed}"
+    real = REAL_DATA_BEFORE.get("my_rounds.csv")
+    INFO.append("data/my_rounds.csv " + ("does not exist (as before)" if real is None
                                          else "is byte-identical to before"))
+    INFO.append(f"all {len(after)} files under data/ are byte-identical to before")
 
 
 if __name__ == "__main__":

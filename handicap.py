@@ -21,8 +21,10 @@
 from decimal import ROUND_HALF_DOWN, ROUND_HALF_UP, Decimal
 
 import numpy as np
+import pandas as pd
 
-from rounds import full_rounds, is_blank
+import strokes_config as cfg
+from rounds import HOLES, is_blank
 
 # 113 is the WHS "standard" slope: the slope of a course of average
 # difficulty. slope / 113 says how much harder (>1) or easier (<1) than
@@ -135,13 +137,16 @@ def fit_overshoot(benchmarks):
 
     np.polyfit(x, y, 1) finds the straight line y = slope * x + intercept
     that sits closest to all the points (least squares - the same idea
-    LinearRegression used back in Phase 3, with one feature).
+    LinearRegression used back in Phase 3, with one feature). The degree
+    (1 = straight line) is a judgement call: OVERSHOOT_FIT_DEGREE in
+    strokes_config.py. The code below assumes a straight line, so changing
+    it means changing this function too.
 
     Returns a dict with the line and the range it's valid over.
     """
     x = benchmarks["hcp_mid"].to_numpy()
     raw = benchmarks["score_to_par"].to_numpy() - x
-    slope, intercept = np.polyfit(x, raw, 1)
+    slope, intercept = np.polyfit(x, raw, cfg.OVERSHOOT_FIT_DEGREE)
     return {"slope": slope, "intercept": intercept, "low": x.min(), "high": x.max()}
 
 
@@ -242,18 +247,73 @@ def index_from_differentials(differentials):
     return value, explanation + "."
 
 
+# Why a round can't be used for the estimated index. Shown in the app.
+NOT_18_HOLES = "9 holes, not used for index"
+NO_RATING_OR_SLOPE = "no rating/slope, not used for index"
+
+
+def index_exclusion_reason(r):
+    """
+    None if this saved round can count toward the estimated index,
+    otherwise the reason it can't (one of the two texts above).
+
+    - 9-hole rounds: the WHS 9-hole rules haven't come from an official
+      source yet, so they're left out rather than guessed at.
+    - No course rating or slope: a differential needs both, and we NEVER
+      fill in a guessed value - a made-up rating would quietly shift the
+      index.
+    """
+    if r["holes"] != HOLES:
+        return NOT_18_HOLES
+    if is_blank(r["course_rating"]) or is_blank(r["slope_rating"]):
+        return NO_RATING_OR_SLOPE
+    return None
+
+
+def index_rounds(rounds):
+    """
+    Split saved rounds into (eligible, excluded) for the estimated index.
+    `excluded` gets an extra "reason" column saying why each was left out.
+    """
+    # One reason (or None) per round, lined up with the rounds' own index
+    # so the True/False filters below pick the matching rows.
+    reasons = pd.Series([index_exclusion_reason(row) for _, row in rounds.iterrows()],
+                        index=rounds.index, dtype=object)
+    eligible = rounds[reasons.isna()]
+    excluded = rounds[reasons.notna()].assign(reason=reasons[reasons.notna()])
+    return eligible, excluded
+
+
 def estimated_index(rounds):
     """
     ESTIMATED index from saved rounds (a DataFrame from storage.load_rounds).
 
-    Uses only 18-hole rounds (9-hole rounds are left out - see
-    rounds.full_rounds). Takes the newest 20 by date and applies the WHS
-    table. See ESTIMATE_NOT_MODELLED for what's missing compared with an
-    official index.
+    Uses only eligible rounds (18 holes, with a course rating and slope -
+    see index_exclusion_reason). Takes the newest 20 by date and applies
+    the WHS table. See ESTIMATE_NOT_MODELLED for what's missing compared
+    with an official index.
     """
-    newest = full_rounds(rounds).sort_values("date", kind="stable").tail(RECENT_ROUNDS)
+    eligible, _ = index_rounds(rounds)
+    newest = eligible.sort_values("date", kind="stable").tail(RECENT_ROUNDS)
     differentials = [round_differential(row) for _, row in newest.iterrows()]
     return index_from_differentials(differentials)
+
+
+def index_usage(rounds):
+    """
+    One plain sentence saying how many rounds the index uses and which were
+    left out and why, e.g. "Uses 5 rounds (the newest 20 of 5 eligible).
+    Not used: 1 round - 9 holes, not used for index."
+    """
+    eligible, excluded = index_rounds(rounds)
+    used = min(len(eligible), RECENT_ROUNDS)
+    text = f"Uses {used} round(s) (the newest {RECENT_ROUNDS} of {len(eligible)} eligible)."
+    if len(excluded):
+        # value_counts(): how many rounds have each reason.
+        parts = [f"{count} round(s) - {reason}"
+                 for reason, count in excluded["reason"].value_counts().items()]
+        text += " Not used: " + "; ".join(parts) + "."
+    return text
 
 
 # Shown in the app next to every estimated index.
@@ -262,7 +322,7 @@ ESTIMATE_NOT_MODELLED = [
     "(the estimate runs HIGH after a blow-up hole)",
     "exceptional score reductions",
     "soft and hard caps (limits on how fast an index can rise)",
-    "9-hole rounds (they're saved, but not counted)",
+    "9-hole rounds and rounds without a course rating/slope (saved, but not counted)",
 ]
 
 

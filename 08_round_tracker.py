@@ -34,7 +34,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from benchmarks import STAT_COLUMNS, load_benchmarks
+import strokes_config as cfg
+from benchmarks import STAT_COLUMNS, expected_stat, load_benchmarks
 from handicap import (
     ESTIMATE_LABEL,
     ESTIMATE_NOT_MODELLED,
@@ -43,16 +44,19 @@ from handicap import (
     estimated_index,
     expected_scores,
     fit_overshoot,
+    index_exclusion_reason,
+    index_usage,
     round_differential,
     round_half_up,
 )
-from rounds import HOLES, full_rounds, validate_round
+from rounds import full_rounds, validate_round
 from storage import (
     SchemaTooNewError,
     export_csv,
     find_duplicates,
     import_rounds,
     load_rounds,
+    practice_folder,
     rounds_path,
     save_round,
 )
@@ -64,8 +68,9 @@ from strokes_lost import (
     strokes_lost,
 )
 
-# Below this many 18-hole rounds, the weakness report says it can't say much.
-FEW_ROUNDS = 3
+# Below this many 18-hole rounds, the weakness report says it can't say much
+# (a judgement call, so it lives in strokes_config.py).
+FEW_ROUNDS = cfg.FEW_ROUNDS_NOTICE
 
 # Every form box has a key (its name in st.session_state) equal to the
 # round column it fills. That lets us (a) show an error under the right box
@@ -149,6 +154,12 @@ if st.session_state.pop("clear_form", False):
         st.session_state.pop(key, None)
 
 st.title("My Golf Round Tracker")
+
+# Practice mode (ROUND_DATA_DIR set): say so loudly, so practice rounds are
+# never mistaken for real ones - and real ones never typed into practice.
+if practice_folder():
+    st.warning(f"Practice mode: data is saved in {practice_folder()}, "
+               f"not your real rounds.")
 st.write(
     "Log your rounds to see where you're losing strokes compared with a typical "
     "golfer at your handicap index. The more rounds you add, the clearer the "
@@ -211,6 +222,16 @@ with st.expander("Known limitations"):
         "meaningful inside its training range, which almost no amateur is in. This "
         "tracker never uses it."
     )
+    # The judgement calls, read straight from strokes_config.py so this
+    # list can't drift from the numbers the code actually uses.
+    st.markdown("**Judgement calls** (from `strokes_config.py`; none calibrated on data):")
+    calls = pd.DataFrame(cfg.JUDGEMENT_CALLS)
+    # Values are a mix of numbers, text, None and a dict; str() makes one
+    # column of text so the table can show them all.
+    calls["value"] = calls["value"].map(str)
+    st.dataframe(calls, hide_index=True)
+    example = 1 - expected_stat(bench, "scramble_pct", 15) / 100
+    st.caption(f"Missed-green cost at 15 hcp: 1 - scramble rate = {example:.2f} strokes.")
 
 # --- First-run guide ---
 if len(rounds) == 0 and not skipped:
@@ -222,7 +243,8 @@ if len(rounds) == 0 and not skipped:
         "optional.\n"
         "3. Press **Save round**. If something doesn't add up, a message appears "
         "under that box and nothing is saved.\n\n"
-        "The estimated handicap index appears once you have 3 rounds of 18 holes."
+        "The estimated handicap index appears once you have 3 rounds of 18 holes "
+        "with a course rating and slope."
     )
     show_stat_guide()
 else:
@@ -270,9 +292,13 @@ with st.form("log_round"):
     st.caption("From the scorecard, for the tees you played:")
     col1, col2, col3, col4 = st.columns(4)
     course_rating = col1.number_input("Course rating", value=None, step=0.1,
-                                      format="%.1f", key="course_rating")
+                                      format="%.1f", key="course_rating",
+                                      help="Needed for the index. If the card doesn't "
+                                           "show it, leave it blank: the round is saved "
+                                           "but not used for the index.")
     field_error(col1, "course_rating")
-    slope_rating = col2.number_input("Slope rating", value=None, step=1, key="slope_rating")
+    slope_rating = col2.number_input("Slope rating", value=None, step=1, key="slope_rating",
+                                     help="Needed for the index (see Course rating).")
     field_error(col2, "slope_rating")
     par = col3.number_input("Par", value=None, step=1, key="par")
     field_error(col3, "par")
@@ -393,6 +419,9 @@ with st.expander("Export / Import rounds (CSV)"):
     st.caption("Same columns as data/my_rounds.example.csv. Every row is checked; "
                "if any row is invalid, nothing is imported. Exact duplicates are "
                "skipped. A backup of your file is made before anything is added.")
+    st.warning("Don't edit the CSV in Excel or Google Sheets: they can change the "
+               "date format, and those rows will then be flagged. Dates must be "
+               "YYYY-MM-DD (e.g. 2026-10-12). Use Export and Import here instead.")
     if uploaded is not None and st.button("Import", key="import"):
         try:
             added, problems, warnings = import_rounds(uploaded)
@@ -438,39 +467,47 @@ else:
     r = full.iloc[choice]
 
     # --- a) Course-adjusted ---
-    expected = expected_scores(r["handicap_index"], r["course_rating"],
-                               r["slope_rating"], overshoot_fit)
-    diff = round_differential(r)
-    ch = course_handicap(r["handicap_index"], r["slope_rating"], r["course_rating"],
-                         r["par"])
+    # Needs the course rating and slope. If they weren't entered we skip
+    # this part rather than guess them.
+    if index_exclusion_reason(r) is not None:
+        st.subheader("Strokes vs expected on this course (course-adjusted)")
+        st.info("No course rating/slope for this round, so there's no course-adjusted "
+                "comparison (and it isn't used for the index). The breakdown below "
+                "doesn't need them.")
+    else:
+        expected = expected_scores(r["handicap_index"], r["course_rating"],
+                                   r["slope_rating"], overshoot_fit)
+        diff = round_differential(r)
+        ch = course_handicap(r["handicap_index"], r["slope_rating"], r["course_rating"],
+                             r["par"])
 
-    st.subheader("Strokes vs expected on this course (course-adjusted)")
-    col1, col2, col3 = st.columns(3)
-    # delta_color="inverse": in golf a NEGATIVE delta (fewer strokes) is good,
-    # so we tell Streamlit to show negative in green and positive in red.
-    col1.metric("Plays to handicap (headline)", f"{expected['plays_to_handicap']:.1f}",
-                delta=f"{r['score'] - expected['plays_to_handicap']:+.1f} your score vs this",
-                delta_color="inverse")
-    col2.metric("Typical round at your handicap (roughly +/-2)",
-                f"{expected['typical_round']:.1f}",
-                delta=f"{r['score'] - expected['typical_round']:+.1f} your score vs this",
-                delta_color="inverse")
-    col3.metric("Your score", f"{r['score']:g}")
+        st.subheader("Strokes vs expected on this course (course-adjusted)")
+        col1, col2, col3 = st.columns(3)
+        # delta_color="inverse": in golf a NEGATIVE delta (fewer strokes) is good,
+        # so we tell Streamlit to show negative in green and positive in red.
+        col1.metric("Plays to handicap (headline)", f"{expected['plays_to_handicap']:.1f}",
+                    delta=f"{r['score'] - expected['plays_to_handicap']:+.1f} your score vs this",
+                    delta_color="inverse")
+        col2.metric(f"Typical round at your handicap (roughly +/-{cfg.TYPICAL_ROUND_BAND})",
+                    f"{expected['typical_round']:.1f}",
+                    delta=f"{r['score'] - expected['typical_round']:+.1f} your score vs this",
+                    delta_color="inverse")
+        col3.metric("Your score", f"{r['score']:g}")
 
-    col1, col2 = st.columns(2)
-    col1.metric("Course handicap", round_half_up(ch), help=f"Unrounded: {ch:.2f}")
-    col2.metric("Score differential", f"{round_half_up(diff, 1):.1f}")
-    st.caption(
-        "**Plays to handicap** = course rating + index x slope / 113: what you'd "
-        "shoot playing exactly to your handicap. Your index comes from your best "
-        "rounds, so most rounds land above it. **Typical round** adds how far "
-        "above their handicap golfers usually score (a line fitted to the "
-        "benchmark data). It's softer: that benchmark figure already includes "
-        "some of the effect of real courses being harder than the standard slope "
-        "of 113, so adding it on top of the slope term double counts a little, "
-        "and the benchmark courses' ratings aren't known. Course handicap uses "
-        "index x slope/113 + (rating - par) (WHS Rule 6.1a)."
-    )
+        col1, col2 = st.columns(2)
+        col1.metric("Course handicap", round_half_up(ch), help=f"Unrounded: {ch:.2f}")
+        col2.metric("Score differential", f"{round_half_up(diff, 1):.1f}")
+        st.caption(
+            "**Plays to handicap** = course rating + index x slope / 113: what you'd "
+            "shoot playing exactly to your handicap. Your index comes from your best "
+            "rounds, so most rounds land above it. **Typical round** adds how far "
+            "above their handicap golfers usually score (a line fitted to the "
+            "benchmark data). It's softer: that benchmark figure already includes "
+            "some of the effect of real courses being harder than the standard slope "
+            "of 113, so adding it on top of the slope term double counts a little, "
+            "and the benchmark courses' ratings aren't known. Course handicap uses "
+            "index x slope/113 + (rating - par) (WHS Rule 6.1a)."
+        )
 
     # --- b) Per-area breakdown (NOT course-adjusted) ---
     st.subheader("Where the strokes went (not course-adjusted)")
@@ -524,9 +561,11 @@ col1.metric("Rounds logged", len(rounds),
 col2.metric(f"Handicap index ({ESTIMATE_LABEL})",
             f"need {MIN_ROUNDS_FOR_INDEX} rounds" if value is None else f"{value:.1f}")
 st.markdown(f"**{ESTIMATE_LABEL}.** This is not your official handicap index.")
+# How many rounds the index uses, and which were left out and why.
+st.markdown(index_usage(rounds))
 st.caption(
-    f"{explanation} WHS Rule 5.2a table, newest 20 18-hole rounds. "
-    "Not modelled: " + "; ".join(ESTIMATE_NOT_MODELLED) + "."
+    f"{explanation} WHS Rule 5.2a table, newest 20 eligible rounds (18 holes, with "
+    "a course rating and slope). Not modelled: " + "; ".join(ESTIMATE_NOT_MODELLED) + "."
 )
 
 if n_full > 0:
@@ -539,8 +578,9 @@ if n_full > 0:
     if n_full < FEW_ROUNDS:
         st.info(f"Too few rounds to say much yet ({n_full} of the {FEW_ROUNDS} "
                 f"needed for a first look).")
-    elif n_full < 5:
-        st.caption("Fewer than 5 rounds: treat this as a first impression, not a pattern.")
+    elif n_full < cfg.FIRST_IMPRESSION_ROUNDS:
+        st.caption(f"Fewer than {cfg.FIRST_IMPRESSION_ROUNDS} rounds: treat this as a "
+                   f"first impression, not a pattern.")
     st.bar_chart(average_ranked.set_index("area")["strokes_lost"],
                  horizontal=True, sort=False)
     if confounded:
@@ -549,11 +589,14 @@ if n_full > 0:
 st.subheader("All rounds")
 history = rounds[["date", "course_name", "tee", "holes", "handicap_index", "score",
                   "adjusted_score", "pcc"]].copy()
-# A differential only means something for an 18-hole round here.
+# A differential needs 18 holes and a rating + slope; the "index" column
+# says whether each round counts toward the estimated index, and if not, why.
+reasons = [index_exclusion_reason(row) for _, row in rounds.iterrows()]
 history["differential"] = [
-    round_half_up(round_differential(row), 1) if row["holes"] == HOLES else None
-    for _, row in rounds.iterrows()
+    round_half_up(round_differential(row), 1) if reason is None else None
+    for (_, row), reason in zip(rounds.iterrows(), reasons)
 ]
+history["index"] = [reason or "eligible" for reason in reasons]
 st.dataframe(history, hide_index=True)
 
 # =====================================================================
